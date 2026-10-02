@@ -1,0 +1,127 @@
+/* DWT 浅色扁平主题
+   规则：不指定任何字体族（只用系统默认字体）；无渐变、无阴影、无位图。
+   字号一律使用 pt 而非 px：px 会使 QFont 仅带 pixelSize、pointSize() 返回 −1，
+     Qt 为工具提示与内建控件计算字体时将持续输出警告（12 px ≈ 9 pt）。
+   配色：
+       底  窗口 #f5f7fa  卡片 #ffffff  日志 #fbfcfe  边框 #e3e8ef
+       字  主 #1c2431  次要 #5b6779  提示 #93a0b0
+       强调 青绿 #0f9d90        进度条 轨道 #eef2f7  填充 #b9e6df */
+
+QWidget { color: #1c2431; }
+QMainWindow, QWidget#root { background: #f5f7fa; }
+
+QScrollArea { border: none; background: transparent; }
+QScrollArea > QWidget > QWidget { background: transparent; }
+
+/* ---------- 顶栏 ---------- */
+QLabel#title { color: #0f9d90; font-size: 14pt; font-weight: bold; }
+QLabel#subtitle { color: #93a0b0; font-size: 9pt; }
+QLabel#statusChip {
+    color: #5b6779; background: #ffffff; border: 1px solid #e3e8ef;
+    border-radius: 10px; padding: 3px 12px; font-size: 9pt;
+}
+QLabel#statusChip[state="run"] { color: #0f9d90; border-color: #b9e6df; background: #f0fbf9; }
+QLabel#statusChip[state="done"] { color: #0f9d90; border-color: #b9e6df; background: #f0fbf9; }
+QLabel#statusChip[state="err"] { color: #c0392b; border-color: #f2c4be; background: #fdf5f4; }
+
+/* ---------- 按钮 ---------- */
+QPushButton {
+    background: #ffffff; color: #1c2431;
+    border: 1px solid #e3e8ef; border-radius: 6px;
+    padding: 5px 14px; font-size: 9pt;
+}
+QPushButton:hover { border-color: #0f9d90; color: #0f9d90; }
+QPushButton:pressed { background: #f0fbf9; }
+QPushButton:disabled { color: #b6bfca; border-color: #eef2f7; background: #fafbfd; }
+QPushButton#run {
+    background: #0f9d90; color: #ffffff; border: none;
+    font-weight: bold; padding: 6px 22px;
+}
+QPushButton#run:hover { background: #0c8a7e; }
+QPushButton#run:disabled { background: #cfe6e2; color: #ffffff; }
+QPushButton#stop { color: #5b6779; }
+QPushButton#stop:hover { color: #c0392b; border-color: #e8b4ac; }
+QPushButton#browse { padding: 4px 10px; }
+
+/* ---------- 卡片 ---------- */
+QFrame#card { background: #ffffff; border: 1px solid #e3e8ef; border-radius: 8px; }
+QLabel#cardTitle { color: #1c2431; font-weight: bold; font-size: 10pt; }
+#hline { background: #e3e8ef; border: none; max-height: 1px; min-height: 1px; }
+
+/* ---------- 折叠分组标题 ---------- */
+QToolButton#group {
+    background: transparent; border: none; color: #1c2431;
+    font-weight: bold; font-size: 10pt; padding: 6px 4px; text-align: left;
+}
+QToolButton#group:hover { color: #0f9d90; }
+QLabel#groupCount { color: #93a0b0; font-size: 8pt; }
+
+/* ---------- 参数行 ---------- */
+QLabel#pname { color: #5b6779; font-size: 9pt; }
+QToolButton#help {
+    color: #93a0b0; border: 1px solid #e3e8ef; border-radius: 8px;
+    background: #ffffff; font-size: 8pt;
+    min-width: 16px; max-width: 16px; min-height: 16px; max-height: 16px;
+}
+QToolButton#help:hover { color: #0f9d90; border-color: #0f9d90; }
+
+/* ---------- 输入控件 ---------- */
+QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox {
+    background: #ffffff; border: 1px solid #e3e8ef; border-radius: 5px;
+    padding: 3px 6px; min-height: 20px;
+    selection-background-color: #b9e6df; selection-color: #1c2431;
+}
+QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus, QComboBox:focus {
+    border-color: #0f9d90;
+}
+QLineEdit:disabled, QSpinBox:disabled, QDoubleSpinBox:disabled, QComboBox:disabled {
+    background: #fafbfd; color: #b6bfca; border-color: #eef2f7;
+}
+QComboBox::drop-down { border: none; width: 16px; }
+QComboBox QAbstractItemView {
+    background: #ffffff; border: 1px solid #e3e8ef; outline: none;
+    selection-background-color: #eef7f5; selection-color: #0f9d90;
+}
+QCheckBox { color: #5b6779; font-size: 9pt; spacing: 6px; }
+QCheckBox::indicator {
+    width: 14px; height: 14px; background: #ffffff;
+    border: 1px solid #e3e8ef; border-radius: 3px;
+}
+QCheckBox::indicator:checked { background: #0f9d90; border-color: #0f9d90; }
+QCheckBox:disabled { color: #b6bfca; }
+
+/* ---------- 进度 ---------- */
+QProgressBar {
+    background: #eef2f7; border: none; border-radius: 6px;
+    min-height: 12px; max-height: 12px; text-align: center;
+}
+QProgressBar::chunk { background: #b9e6df; border-radius: 6px; }
+QLabel#pct { color: #0f9d90; font-size: 22pt; font-weight: bold; }
+QLabel#phase { color: #1c2431; font-size: 10pt; }
+QLabel#detail { color: #93a0b0; font-size: 9pt; }
+
+/* ---------- 日志 ---------- */
+QPlainTextEdit#log {
+    background: #fbfcfe; border: 1px solid #e3e8ef; border-radius: 6px;
+    color: #1c2431; font-size: 9pt; padding: 6px;
+}
+
+/* ---------- 底栏 ---------- */
+QLabel#footPath { color: #5b6779; font-size: 9pt; }
+QLabel#footInfo { color: #93a0b0; font-size: 9pt; }
+
+/* ---------- 滚动条 ---------- */
+QScrollBar:vertical { background: transparent; width: 10px; margin: 0; }
+QScrollBar::handle:vertical { background: #dde3ec; border-radius: 5px; min-height: 24px; }
+QScrollBar::handle:vertical:hover { background: #c6cfdb; }
+QScrollBar:horizontal { background: transparent; height: 10px; margin: 0; }
+QScrollBar::handle:horizontal { background: #dde3ec; border-radius: 5px; min-width: 24px; }
+QScrollBar::handle:horizontal:hover { background: #c6cfdb; }
+QScrollBar::add-line, QScrollBar::sub-line { width: 0; height: 0; background: transparent; }
+QScrollBar::add-page, QScrollBar::sub-page { background: transparent; }
+
+/* ---------- 悬停说明 ---------- */
+QToolTip {
+    background: #ffffff; color: #1c2431; font-size: 9pt;
+    border: 1px solid #e3e8ef; padding: 5px 7px;
+}

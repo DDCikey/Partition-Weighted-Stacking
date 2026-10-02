@@ -1,0 +1,13 @@
+# 运行时依赖（许可证见 THIRD_PARTY_LICENSES.md）
+# 已验证版本：numpy 2.4.4 / scipy 1.17.1 / astropy 7.2.0 /
+#   photutils 3.0.0 / PySide6 6.10.2 / Python 3.12.5
+
+numpy>=2.0
+scipy>=1.11
+astropy>=6.0
+photutils>=1.11
+PySide6>=6.6
+
+# 可选：探测可用内存，用于判断临时帧是否落盘。
+# 未安装时不做自动判断，可用 --frames-dir 显式指定。
+# psutil>=5.9
