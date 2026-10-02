@@ -11,6 +11,7 @@ Float32 灰度成品。它使用的叠加算法名为 **Partition-Weighted Stack
 - 依赖均为可商用的开源许可（BSD-3-Clause / PSF-2.0 / LGPL-3.0）。
 - 软件 MIT、方法论文 CC BY 4.0。欢迎二次开发，只请保留署名——见文末「许可与署名」。
 
+测试软件下载：https://pan.baidu.com/s/1b_jnoBnct1Y5kaiAv0Px5g?pwd=rnst
 ---
 
 ## 一、设计前提：只做叠加
