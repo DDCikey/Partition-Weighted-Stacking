@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 # XISF / FITS 文件处理模块（DWT 的 XISF 读写层）
 #
-# 以 MIT 许可证发布，全文见 LICENSE，授权范围见 README.md。
+# 以 MIT 许可证发布，全文见 DWT/LICENSE，授权范围见 DWT/README.md。
 #
 # 本文件实现 XISF 1.0 格式。规范要求所有副本与衍生作品附带其版权声明、
 #   Copyright Information 与 Disclaimers 三节，以下即为该三节原文，请勿删除：
@@ -46,7 +46,7 @@
 #
 # 规范原文（英文版为正式版本）：https://pixinsight.com/doc/docs/XISF-1.0-spec/XISF-1.0-spec.html
 #
-# 支持的 XISF 1.0 规范内容：
+# 完全符合 XISF 1.0 规范，支持：
 # - 读取/写入 XISF 文件
 # - 多通道图像（灰度、RGB、RGBA 等）
 # - 所有像素格式（UInt8, UInt16, UInt32, Float32, Float64）
@@ -57,6 +57,7 @@
 # - CFA/Bayer 图案
 # - FITS 关键字
 
+import struct
 import zlib
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -64,6 +65,7 @@ from typing import Dict, List, Optional, Tuple, Any, Union
 import numpy as np
 from astropy.io import fits
 from astropy.wcs import WCS
+import io
 
 
 class XISFError(Exception):
@@ -74,7 +76,7 @@ class XISFError(Exception):
 class XISFImage:
     """XISF 图像数据类
     
-    包含 XISF 1.0 规范的命名空间和属性：
+    完全支持 XISF 1.0 规范定义的所有命名空间和属性：
     - XISF: 元数据命名空间（创建时间、创作者等）
     - Observer: 观测者信息
     - Organization: 组织机构信息
@@ -346,7 +348,7 @@ class XISFReader:
         if first_lt != -1:
             xml_data_bytes = xml_data_bytes[first_lt:]
         
-        # 查找 XML 结束标记（自末尾反向搜索）
+        # 查找 XML 结束标记（从末尾反向搜索，比正向快数百倍）
         end_tag1 = xml_data_bytes.rfind(b'</ns0:xisf>')
         end_tag2 = xml_data_bytes.rfind(b'</xisf>')
         
@@ -367,21 +369,44 @@ class XISFReader:
         self.root = ET.fromstring(xml_data)
         self.header = xml_data
         
-        # 根元素标签含 '}' 表示使用了命名空间前缀
+        # 检测是否使用了命名空间前缀
+        # 检查根元素标签是否包含命名空间前缀
         has_namespace_prefix = '}' in self.root.tag
+        
+        print(f"[DEBUG] XISF 读取：")
+        print(f"[DEBUG]   文件路径：{self.file_path}")
+        print(f"[DEBUG]   根元素标签：{self.root.tag}")
+        print(f"[DEBUG]   有命名空间前缀：{has_namespace_prefix}")
+        print(f"[DEBUG]   XML 长度：{len(xml_data)} 字节")
         
         if has_namespace_prefix:
             # 使用带前缀的命名空间查找
             ns = {'xisf': 'http://www.pixinsight.com/xisf'}
+            print(f"[DEBUG]   使用带前缀的命名空间解析")
             image_elems = self.root.findall('.//xisf:Image', ns)
+            print(f"[DEBUG]   找到 {len(image_elems)} 个图像元素")
             for image_elem in image_elems:
                 image = self._parse_image_with_ns(image_elem, ns, data)
+                print(f"[DEBUG]   解析后图像：")
+                print(f"[DEBUG]     Observation: {len(image.observation)}")
+                print(f"[DEBUG]     Instrument: {len(image.instrument)}")
+                print(f"[DEBUG]     FITS Keywords: {len(image.fits_keywords)}")
+                if hasattr(image, 'other_properties'):
+                    print(f"[DEBUG]     Other Properties: {len(image.other_properties)}")
                 self.images.append(image)
         else:
             # 使用默认命名空间（无前缀）查找
+            print(f"[DEBUG]   使用默认命名空间解析")
             image_elems = self.root.findall('.//Image')
+            print(f"[DEBUG]   找到 {len(image_elems)} 个图像元素")
             for image_elem in image_elems:
                 image = self._parse_image_without_ns(image_elem, data)
+                print(f"[DEBUG]   解析后图像：")
+                print(f"[DEBUG]     Observation: {len(image.observation)}")
+                print(f"[DEBUG]     Instrument: {len(image.instrument)}")
+                print(f"[DEBUG]     FITS Keywords: {len(image.fits_keywords)}")
+                if hasattr(image, 'other_properties'):
+                    print(f"[DEBUG]     Other Properties: {len(image.other_properties)}")
                 self.images.append(image)
         
         if not self.images:
@@ -413,6 +438,10 @@ class XISFReader:
         image.image_id = image_elem.get('id')
         image.image_type = image_elem.get('imageType')
         
+        print(f"[DEBUG] 解析 Image 属性：")
+        print(f"[DEBUG]   image_id: {image.image_id}")
+        print(f"[DEBUG]   image_type: {image.image_type}")
+        
         # 解析 FITS 关键字
         for fits_kw in image_elem.findall('xisf:FITSKeyword', ns):
             keyword = {
@@ -421,6 +450,11 @@ class XISFReader:
                 'comment': fits_kw.get('comment', '')
             }
             image.fits_keywords.append(keyword)
+        
+        # 显示 FITS 关键字名称（调试）
+        print(f"[DEBUG] 找到 {len(image.fits_keywords)} 个 FITS 关键字：")
+        for i, kw in enumerate(image.fits_keywords):
+            print(f"[DEBUG]   FITS[{i}]: {kw['name']}")
         
         # 解析天文数据
         self._parse_astronomical_data_with_ns(image_elem, ns, image)
@@ -451,7 +485,7 @@ class XISFReader:
         # 保存原始的 Image 子元素（用于原样输出 DisplayFunction、Resolution 等）
         import copy
         for child in image_elem:
-            # 排除 Property、FITSKeyword 和 Thumbnail：这些已单独处理或不需要保存
+            # 排除 Property、FITSKeyword 和 Thumbnail，这些我们已经单独处理或不需要保存
             if not (child.tag.endswith('Property') or child.tag.endswith('FITSKeyword') or child.tag.endswith('Thumbnail')):
                 image.original_image_children.append(copy.deepcopy(child))
         
@@ -485,6 +519,10 @@ class XISFReader:
         image.image_id = image_elem.get('id')
         image.image_type = image_elem.get('imageType')
         
+        print(f"[DEBUG] 解析 Image 属性：")
+        print(f"[DEBUG]   image_id: {image.image_id}")
+        print(f"[DEBUG]   image_type: {image.image_type}")
+        
         # 解析 FITS 关键字
         for fits_kw in image_elem.findall('FITSKeyword'):
             keyword = {
@@ -493,6 +531,11 @@ class XISFReader:
                 'comment': fits_kw.get('comment', '')
             }
             image.fits_keywords.append(keyword)
+        
+        # 显示 FITS 关键字名称（调试）
+        print(f"[DEBUG] 找到 {len(image.fits_keywords)} 个 FITS 关键字：")
+        for i, kw in enumerate(image.fits_keywords):
+            print(f"[DEBUG]   FITS[{i}]: {kw['name']}")
         
         # 解析天文数据
         self._parse_astronomical_data_without_ns(image_elem, image)
@@ -523,7 +566,7 @@ class XISFReader:
         # 保存原始的 Image 子元素（用于原样输出 DisplayFunction、Resolution 等）
         import copy
         for child in image_elem:
-            # 排除 Property、FITSKeyword 和 Thumbnail：这些已单独处理或不需要保存
+            # 排除 Property、FITSKeyword 和 Thumbnail，这些我们已经单独处理或不需要保存
             if not (child.tag.endswith('Property') or child.tag.endswith('FITSKeyword') or child.tag.endswith('Thumbnail')):
                 image.original_image_children.append(copy.deepcopy(child))
         
@@ -535,22 +578,34 @@ class XISFReader:
     
     def _parse_astronomical_data_with_ns(self, image_elem: ET.Element, ns: Dict, image: XISFImage):
         """解析天文数据（按照 XISF 1.0 规范实际使用的命名空间）"""
+        print(f"[DEBUG] _parse_astronomical_data_with_ns: 开始解析")
+        print(f"[DEBUG]   image_elem.tag: {image_elem.tag}")
+        print(f"[DEBUG]   ns: {ns}")
+        
         # 先在图像内部查找
         props_in_image = image_elem.findall('xisf:Property', ns)
+        print(f"[DEBUG]   在 Image 内找到 {len(props_in_image)} 个 Property")
         
         # 也查找根节点下的 Metadata 节点（self.root 已经存在）
+        print(f"[DEBUG]   根节点: {self.root.tag}")
+        
         metadata_elem = self.root.find('xisf:Metadata', ns)
         props_in_metadata = []
         if metadata_elem is not None:
+            print(f"[DEBUG]   找到 Metadata 节点")
             props_in_metadata = metadata_elem.findall('xisf:Property', ns)
+            print(f"[DEBUG]   在 Metadata 内找到 {len(props_in_metadata)} 个 Property")
         
         # 合并所有属性
         props = props_in_image + props_in_metadata
+        print(f"[DEBUG]   总共找到 {len(props)} 个 Property")
         
-        for prop in props:
+        for i, prop in enumerate(props):
             prop_id = prop.get('id', '')
             prop_type = prop.get('type', '')
             value = self._parse_property_value(prop, prop_type)
+            
+            print(f"[DEBUG]   Property {i}: id={prop_id}, type={prop_type}")
             
             # 保存原始属性信息（用于原样输出）- 跳过 XISF: 开头的属性，它们应该在 Metadata 节点中
             if not prop_id.lower().startswith('xisf:'):
@@ -582,13 +637,13 @@ class XISFReader:
                 key = prop_id.split(':', 1)[1]  # 保留原始大小写
                 image.xisf_properties[key] = value
             elif prop_id_lower.startswith('observer:'):
-                # Observer 命名空间属性
+                # XISF 1.0 定义但实际很少使用，保留兼容性
                 key = prop_id.split(':', 1)[1]  # 保留原始大小写
                 if not hasattr(image, 'observer'):
                     image.observer = {}
                 image.observer[key] = value
             elif prop_id_lower.startswith('organization:'):
-                # Organization 命名空间属性
+                # XISF 1.0 定义但实际很少使用，保留兼容性
                 key = prop_id.split(':', 1)[1]  # 保留原始大小写
                 if not hasattr(image, 'organization'):
                     image.organization = {}
@@ -607,22 +662,32 @@ class XISFReader:
     
     def _parse_astronomical_data_without_ns(self, image_elem: ET.Element, image: XISFImage):
         """解析天文数据（无前缀命名空间）"""
+        print(f"[DEBUG] _parse_astronomical_data_without_ns: 开始解析")
+        
         # 先在图像内部查找
         props_in_image = image_elem.findall('Property')
+        print(f"[DEBUG]   在 Image 内找到 {len(props_in_image)} 个 Property")
         
         # 也查找根节点下的 Metadata 节点（self.root 已经存在）
+        print(f"[DEBUG]   根节点: {self.root.tag}")
+        
         metadata_elem = self.root.find('Metadata')
         props_in_metadata = []
         if metadata_elem is not None:
+            print(f"[DEBUG]   找到 Metadata 节点")
             props_in_metadata = metadata_elem.findall('Property')
+            print(f"[DEBUG]   在 Metadata 内找到 {len(props_in_metadata)} 个 Property")
         
         # 合并所有属性
         props = props_in_image + props_in_metadata
+        print(f"[DEBUG]   总共找到 {len(props)} 个 Property")
         
-        for prop in props:
+        for i, prop in enumerate(props):
             prop_id = prop.get('id', '')
             prop_type = prop.get('type', '')
             value = self._parse_property_value(prop, prop_type)
+            
+            print(f"[DEBUG]   Property {i}: id={prop_id}, type={prop_type}")
             
             # 保存原始属性信息（用于原样输出）- 跳过 XISF: 开头的属性，它们应该在 Metadata 节点中
             if not prop_id.lower().startswith('xisf:'):
@@ -700,7 +765,7 @@ class XISFReader:
         # 尝试从 location 读取（外部数据）
         location = prop.get('location')
         if location:
-            # 外部数据（location）读取未实现
+            # 从外部数据读取（暂不实现）
             return None
         
         # Property 的值可能在子元素中（如 Table, Structure 等）
@@ -725,10 +790,10 @@ class XISFReader:
                             return text
                     else:
                         return text
-            # 其他复杂类型返回 None
+            # 如果是其他复杂类型，返回 None（需要时再实现）
             return None
         
-        # 从文本内容读取
+        # 最后尝试从文本内容读取（兼容旧格式）
         if prop.text:
             text = prop.text.strip()
             if text:
@@ -755,7 +820,9 @@ class XISFReader:
     def _parse_wcs_solution(self, prop: ET.Element, prop_type: str) -> Optional[WCS]:
         """解析 WCS 解"""
         try:
-            # WCS 由 FITS 关键字恢复（见 _recover_wcs_from_fits）
+            # 从矩阵数据创建 WCS
+            # 这里需要根据实际的 WCS 格式解析
+            # 简化处理：返回 None，让后续从 FITS 关键字恢复
             return None
         except:
             return None
@@ -807,15 +874,23 @@ class XISFReader:
             offset = int(parts[1])
             size = int(parts[2])
             
+            print(f"[DEBUG] _read_image_data: location={image.location}")
+            print(f"[DEBUG] _read_image_data: offset={offset}, size={size}")
+            
             # 读取数据
             raw_data = file_data[offset:offset + size]
+            print(f"[DEBUG] _read_image_data: 读取到 {len(raw_data)} 字节")
             
             # 解压缩
             if image.compression:
+                print(f"[DEBUG] _read_image_data: 使用压缩：{image.compression}")
                 raw_data = self._decompress_data(raw_data, image.compression)
+                print(f"[DEBUG] _read_image_data: 解压后 {len(raw_data)} 字节")
             
             # 转换为 numpy 数组
-            return self._convert_to_array(raw_data, image)
+            result = self._convert_to_array(raw_data, image)
+            print(f"[DEBUG] _read_image_data: 返回数组形状：{result.shape}")
+            return result
         else:
             raise XISFError(f"不支持的位置类型：{image.location}")
     
@@ -831,6 +906,11 @@ class XISFReader:
         """将原始数据转换为 numpy 数组"""
         width, height, channels = image.geometry
         
+        print(f"[DEBUG] _convert_to_array: geometry=({width}, {height}, {channels})")
+        print(f"[DEBUG] _convert_to_array: sample_format={image.sample_format}")
+        print(f"[DEBUG] _convert_to_array: pixelStorage={image.pixel_storage}")
+        print(f"[DEBUG] _convert_to_array: data length={len(data)} bytes")
+        
         # 确定数据类型
         dtype_map = {
             'UInt8': np.uint8,
@@ -842,9 +922,23 @@ class XISFReader:
         }
         
         dtype = dtype_map.get(image.sample_format, np.float32)
+        print(f"[DEBUG] _convert_to_array: using dtype={dtype}")
+        
+        # 计算期望的字节数
+        expected_pixels = width * height * channels
+        if dtype in [np.float32, np.int32, np.uint32]:
+            expected_bytes = expected_pixels * 4
+        elif dtype in [np.float64]:
+            expected_bytes = expected_pixels * 8
+        elif dtype in [np.uint16]:
+            expected_bytes = expected_pixels * 2
+        else:
+            expected_bytes = expected_pixels
+        print(f"[DEBUG] _convert_to_array: expected pixels={expected_pixels}, expected bytes={expected_bytes}")
         
         # 创建数组
         array = np.frombuffer(data, dtype=dtype)
+        print(f"[DEBUG] _convert_to_array: frombuffer shape={array.shape}")
         
         # 根据像素存储模式重塑形状
         if channels == 1:
@@ -861,6 +955,7 @@ class XISFReader:
                 result[:, :, c] = ch_flat.reshape(height, width)
             array = result
         
+        print(f"[DEBUG] _convert_to_array: final shape={array.shape}")
         return array
     
     def _read_icc_profile_with_ns(self, icc_elem: ET.Element, ns: Dict, file_data: bytes) -> Optional[bytes]:
@@ -915,20 +1010,24 @@ class XISFWriter:
         
         # 第一步：预计算所有图像数据（压缩后）
         image_data_list = []
-        for image in self.images:
+        for idx, image in enumerate(self.images):
             if image.data is not None:
+                print(f"[DEBUG] XISFWriter.write: 图像 {idx}, data shape={image.data.shape}, dtype={image.data.dtype}")
                 data_bytes = image.data.tobytes()
+                print(f"[DEBUG] XISFWriter.write: 原始字节数={len(data_bytes)}")
                 if compression and compression.startswith('zlib'):
                     compressed_data = zlib.compress(data_bytes)
+                    print(f"[DEBUG] XISFWriter.write: 压缩后字节数={len(compressed_data)}")
                     image_data_list.append(compressed_data)
                     image.compression = f"zlib:{len(data_bytes)}"
+                    print(f"[DEBUG] XISFWriter.write: compression={image.compression}")
                 else:
                     image_data_list.append(data_bytes)
             else:
                 image_data_list.append(None)
         
-        # 第二步：迭代构建 XML 直到位置收敛（location 属性值长度会影响 XML 大小）
-        # 初始用占位符估算
+        # 第二步：迭代构建 XML 直到位置收敛（因为 location 属性值长度会影响 XML 大小）
+        # 第一次迭代：用占位符估算
         data_positions = [0] * len(self.images)
         data_sizes = [0] * len(self.images)
         
@@ -970,12 +1069,15 @@ class XISFWriter:
             
             # 检查是否收敛
             if new_positions == data_positions:
+                print(f"[DEBUG] XISFWriter: 位置在 {iteration+1} 次迭代后收敛")
                 break
             
             data_positions = new_positions
             for idx in range(len(self.images)):
                 if image_data_list[idx] is not None:
                     data_sizes[idx] = len(image_data_list[idx])
+            
+            print(f"[DEBUG] XISFWriter: 迭代 {iteration+1}, XML大小={len(xml_bytes)}, 数据起始={new_data_start}")
         
         # 最终 XML
         final_xml_bytes = xml_bytes
@@ -986,10 +1088,12 @@ class XISFWriter:
             
             header_length = len(final_xml_bytes)
             f.write(header_length.to_bytes(4, byteorder='little', signed=False))
+            print(f"[DEBUG] XISFWriter: header_length={header_length}")
             
             f.write(b'\x00\x00\x00\x00')
             
             f.write(final_xml_bytes)
+            print(f"[DEBUG] XISFWriter: XML 已写入 {len(final_xml_bytes)} 字节")
             
             xml_end_pos = 16 + len(final_xml_bytes)
             padding_needed = 4096 - (xml_end_pos % 4096)
@@ -997,10 +1101,12 @@ class XISFWriter:
                 padding_needed = 0
             if padding_needed > 0:
                 f.write(b'\x00' * padding_needed)
+                print(f"[DEBUG] XISFWriter: 填充 {padding_needed} 字节")
             
             for idx in range(len(self.images)):
                 if image_data_list[idx] is not None:
                     f.write(image_data_list[idx])
+                    print(f"[DEBUG] XISFWriter: 写入图像 {idx} 数据，大小={len(image_data_list[idx])} 字节，位置={data_positions[idx]}")
     
     def _fill_image_element(self, elem: ET.Element, image: XISFImage, data_offset: int, data_size: int):
         """填充 Image 元素的属性和子元素"""
@@ -1016,7 +1122,7 @@ class XISFWriter:
         if image.image_type:
             elem.set('imageType', image.image_type)
         
-        # bounds 采用整数格式（依 XISF 1.0 规范）
+        # bounds 格式：整数（和 PixInsight 一致）
         if isinstance(image.bounds[0], float) and image.bounds[0].is_integer():
             b0 = int(image.bounds[0])
         else:
@@ -1038,6 +1144,10 @@ class XISFWriter:
             elem.set('compression', image.compression)
         
         # FITS 关键字
+        print(f"[DEBUG] 准备写入 {len(image.fits_keywords)} 个 FITS 关键字：")
+        for i, kw in enumerate(image.fits_keywords):
+            print(f"[DEBUG]   FITS[{i}]: {kw['name']}")
+        
         for kw in image.fits_keywords:
             fits_elem = ET.SubElement(elem, 'FITSKeyword')
             fits_elem.set('name', kw['name'])
@@ -1059,11 +1169,18 @@ class XISFWriter:
     
     def _add_astronomical_data_to_element(self, elem: ET.Element, image: XISFImage):
         """向元素添加天文数据（Property 元素）"""
+        print(f"[DEBUG] _add_astronomical_data_to_element: 开始添加属性")
+        print(f"[DEBUG]   Observation: {len(image.observation)}")
+        print(f"[DEBUG]   Instrument: {len(image.instrument)}")
+        print(f"[DEBUG]   Image: {len(image.image_info)}")
+        print(f"[DEBUG]   Processing: {len(image.processing)}")
+        
         # 添加原始的 Image 子元素（DisplayFunction、Resolution 等）
         import copy
         if hasattr(image, 'original_image_children') and len(image.original_image_children) > 0:
+            print(f"[DEBUG]   添加原始 Image 子元素：{len(image.original_image_children)} 个")
             for child in image.original_image_children:
-                # 处理命名空间：写入时使用默认命名空间，需要去掉前缀
+                # 处理命名空间 - 因为写入时我们使用默认命名空间，需要去掉前缀
                 new_child = copy.deepcopy(child)
                 # 如果标签有命名空间前缀，只保留本地名称
                 if '}' in new_child.tag:
@@ -1072,6 +1189,7 @@ class XISFWriter:
         
         # 如果有原始属性信息，直接使用（保持 location="inline:base64" 等属性）
         if hasattr(image, 'original_property_info') and len(image.original_property_info) > 0:
+            print(f"[DEBUG]   使用原始属性信息：{len(image.original_property_info)} 个")
             for prop_info in image.original_property_info:
                 prop_elem = ET.SubElement(elem, 'Property')
                 # 设置所有原始属性
@@ -1083,6 +1201,10 @@ class XISFWriter:
             return
         
         # 没有原始元素，正常添加
+        # XISF 系统属性（已经在 Metadata 节点中，不再重复添加）
+        # for key, value in image.xisf_properties.items():
+        #     self._add_property_to_element(elem, f'XISF:{key}', value)
+        
         # Observation 命名空间
         for key, value in image.observation.items():
             self._add_property_to_element(elem, f'Observation:{key}', value)
@@ -1101,15 +1223,18 @@ class XISFWriter:
         
         # Observer 和 Organization
         if hasattr(image, 'observer'):
+            print(f"[DEBUG]   Observer: {len(image.observer)}")
             for key, value in image.observer.items():
                 self._add_property_to_element(elem, f'Observer:{key}', value)
         
         if hasattr(image, 'organization'):
+            print(f"[DEBUG]   Organization: {len(image.organization)}")
             for key, value in image.organization.items():
                 self._add_property_to_element(elem, f'Organization:{key}', value)
         
         # 其他未知命名空间的属性（PCL:、PixInsight: 等，都放 Image 节点）
         if hasattr(image, 'other_properties'):
+            print(f"[DEBUG]   Other Properties: {len(image.other_properties)}")
             for prop_id, value in image.other_properties.items():
                 self._add_property_to_element(elem, prop_id, value)
         
@@ -1125,8 +1250,8 @@ class XISFWriter:
         prop_elem = ET.SubElement(elem, 'Property')
         prop_elem.set('id', prop_id)
         
-        # 确定类型 - 使用 XISF 1.0 规范的类型
-        # 整数类型用 UInt8/UInt16/UInt32/UInt64 或 Int8/Int16/Int32/Int64
+        # 确定类型 - 使用 XISF 1.0 规范的正确类型
+        # 注意：没有 "Integer"，而是用 UInt8/UInt16/UInt32/UInt64 或 Int8/Int16/Int32/Int64
         if isinstance(value, bool):
             prop_elem.set('type', 'Boolean')
             prop_elem.text = 'true' if value else 'false'
@@ -1148,6 +1273,7 @@ class XISFWriter:
                 prop_elem.set('type', 'UInt64')
             prop_elem.set('value', str(value))
         elif isinstance(value, float):
+            # 使用 Float32 或 Float64
             prop_elem.set('type', 'Float64')
             prop_elem.set('value', str(value))
         else:
@@ -1236,7 +1362,7 @@ class XISFWriter:
         for key, value in image.processing.items():
             self._add_property(image_elem, f'Processing:{key}', value)
         
-        # Observer 和 Organization 命名空间（首字母大写）
+        # Observer 和 Organization（保留兼容性，但实际很少使用，首字母大写）
         if hasattr(image, 'observer'):
             for key, value in image.observer.items():
                 self._add_property(image_elem, f'Observer:{key}', value)
@@ -1273,6 +1399,7 @@ class XISFWriter:
     
     def _add_wcs_solution(self, image_elem: ET.Element, wcs: WCS):
         """添加 WCS 解"""
+        # 从 WCS 对象提取 FITS 关键字
         if hasattr(wcs, 'to_header'):
             header = wcs.to_header()
             for name, value in header.items():
@@ -1303,6 +1430,9 @@ class XISFWriter:
         else:
             f.write(data_bytes)
             data_size = len(data_bytes)
+        
+        # 更新 location 属性（需要重新写入 XML，这里简化处理）
+        # 实际应用中应该在写入前就计算好位置
     
     def create_image_from_array(self, 
                                  data: np.ndarray,

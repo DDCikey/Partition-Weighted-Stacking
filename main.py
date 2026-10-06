@@ -1,10 +1,10 @@
 # DWT 入口
-# 本文件以 MIT 许可证发布，全文见 LICENSE，授权范围见 README.md。
+# 20261005 界面迁到 WevvMold：sys.path 加入 WevvMoldGUI_for_python\python
 #
-#     python main.py                图形界面
-#     python main.py --cli <参数…>   命令行（批处理）
+#     python DWT/main.py                图形界面
+#     python DWT/main.py --cli <参数…>   命令行（批处理，以及与 v2 做等价性回归）
 #
-# 两条入口共用 core/pws_params.py 的参数定义。
+# 两条入口共用 core/pws_params.py 那一份参数定义，不存在第二套默认值。
 
 from __future__ import annotations
 
@@ -12,8 +12,9 @@ import multiprocessing
 import sys
 from pathlib import Path
 
-_HERE = Path(__file__).resolve().parent                      # 仓库根
-for _p in (str(_HERE), str(_HERE / 'core'), str(_HERE / 'ui')):
+_HERE = Path(__file__).resolve().parent                      # DWT/
+for _p in (str(_HERE.parent), str(_HERE / 'core'), str(_HERE / 'ui'),
+           str(_HERE.parent / 'WevvMoldGUI_for_python' / 'python')):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 

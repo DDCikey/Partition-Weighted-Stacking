@@ -11,9 +11,14 @@
 | Photutils | 星点检测与 PSF 拟合（`detection.DAOStarFinder` / `detection.find_peaks` / `psf.fit_fwhm`） | Copyright (c) 2011-2026, Photutils Developers. All rights reserved. | BSD-3-Clause |
 | psutil（可选） | 探测可用内存，决定临时帧是否落盘 | Copyright (c) 2009, Jay Loden, Dave Daeschler, Giampaolo Rodola. All rights reserved. | BSD-3-Clause |
 | PyYAML | astropy 表格元数据（ECSV/YAML 头）读写的必需依赖，随 astropy 导入链加载 | Copyright (c) 2017-2021 Ingy döt Net / Copyright (c) 2006-2016 Kirill Simonov | MIT（全文见 [LICENSES/PyYAML-MIT.txt](LICENSES/PyYAML-MIT.txt)） |
-| PySide6（Qt for Python） | 图形界面（`QtWidgets` / `QtCore` / `QtGui`） | The Qt Company Ltd.（随包的 `LicenseRef-Qt-Commercial.txt` 及各 Qt 库自带的声明文件） | LGPL-3.0（亦可按 GPL-2.0 / GPL-3.0 / 商业许可使用） |
 | OpenSSL（libssl-3 / libcrypto-3） | Python 标准库 `ssl` / `hashlib` 扩展的底层加密实现（随引擎导入加载；本软件自身不发起任何联网） | Copyright 1998-2024 The OpenSSL Authors. All rights reserved. | Apache-2.0（全文见 [LICENSES/Apache-2.0.txt](LICENSES/Apache-2.0.txt)） |
-| Python 标准库（含 `ctypes` 及其捆绑的 libffi） | zlib / xml.etree / math / argparse / concurrent.futures / html / threading / io … | Copyright (c) Python Software Foundation.（捆绑组件的版权声明含于同一文件） | PSF-2.0（全文见 [LICENSES/Python-PSF.txt](LICENSES/Python-PSF.txt)） |
+| Python 标准库（含 `ctypes` 及其捆绑的 libffi） | zlib / xml.etree / math / argparse / concurrent.futures / threading / tkinter / io … | Copyright (c) Python Software Foundation.（捆绑组件的版权声明含于同一文件） | PSF-2.0（全文见 [LICENSES/Python-PSF.txt](LICENSES/Python-PSF.txt)） |
+
+## 图形界面框架 WevvMoldGUI（自研组件）
+
+图形界面框架 **WevvMoldGUI**（C++ 核心 + Python 绑定）为本软件作者自研，
+以 **MIT 许可证**随本仓库分发，许可证全文见
+[WevvMoldGUI_for_python/LICENSE](WevvMoldGUI_for_python/LICENSE)。
 
 ## BSD-3-Clause 许可证全文
 
@@ -50,36 +55,17 @@ CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
 ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 POSSIBILITY OF SUCH DAMAGE.
 
-## PySide6 / Qt 的 LGPL-3.0 使用方式
-
-本软件仅以动态导入方式使用 pip 安装的二进制 wheel，**未修改 Qt 源码**。
-
-LGPL-3.0 的完整文本见 [LICENSES/LGPL-3.0.txt](LICENSES/LGPL-3.0.txt)；LGPL-3.0 通过引用
-并入 GPL-3.0 的条款，GPL-3.0 全文见 [LICENSES/GPL-3.0.txt](LICENSES/GPL-3.0.txt)。
-
-再分发二进制时：
-
-- 保留上述两份许可证全文与 Qt 版权声明（Qt 自带的声明文件随 PySide6 包一并分发）。
-- 保证接收者能够替换 Qt 库。因此打包时必须使用 PyInstaller 的**文件夹模式**
-  （`--onedir`）而不是单文件模式（`--onefile`）：前者把 Qt 的动态库以独立文件放在
-  产物目录中，接收者可以自行替换；后者会把它们封进一个自解压可执行文件，无法替换。
-- 本软件以源码形式发布，接收者也可以直接用源码配合自己安装的 Qt 运行。
-
 ## 二进制再分发时需要附带什么
 
 Python 侧的许可证由打包过程自动放入 `_internal/` 下各组件的 `*.dist-info/licenses/`
 （NumPy、Astropy、Photutils 等）。除此之外请随包保留：
 
 - `LICENSE`：本软件的 MIT 许可证。
-- `LICENSES/LGPL-3.0.txt`、`LICENSES/GPL-3.0.txt`：Qt / PySide6 的许可证全文。
-- `LICENSES/LicenseRef-Qt-Commercial.txt`、`LICENSES/LicenseRef-Qt-Commercial-shiboken6.txt`：PySide6 与 shiboken6 自带的许可证声明文件。
+- `WevvMoldGUI_for_python/LICENSE`：自研图形界面框架的 MIT 许可证全文。
 - `LICENSES/Apache-2.0.txt`：OpenSSL 的许可证全文。
 - `LICENSES/PyYAML-MIT.txt`：PyYAML 的许可证全文。
 - `LICENSES/Python-PSF.txt`：Python 运行时及其捆绑组件（含 libffi）的许可证。
 - `THIRD_PARTY_LICENSES.md`：本文件。
-
-Qt 的动态库以独立文件形式位于 `_internal/PySide6/`（如 `Qt6Core.dll`、`Qt6Gui.dll`、
-`Qt6Widgets.dll`），接收者可直接替换，满足 LGPL-3.0 对"合适的共享库机制"的要求。
 
 ## XISF 1.0 规范声明
 

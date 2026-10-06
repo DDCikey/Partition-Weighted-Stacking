@@ -1,34 +1,36 @@
-# DWT 日志视图：按阶段标签着色
-# 本文件以 MIT 许可证发布，全文见 LICENSE，授权范围见 README.md。
+# 20261005 DWT 日志模型：按阶段标签着色（WevvMold 自绘版）
 #
 # 引擎每行日志以 [阶段] 开头（[帧] [星表] [C] [R] [W] [叠加] [验收] …），
-#   这里据此给该行上色。着色共分四类：
+#   这里据此给该行上色。着色只分四类，不做彩虹：
 #     读帧/落盘类 → 提示灰      权重与分区类 → 强调青绿
 #     结果与输出类 → 蓝          错误与终止 → 红
 # 不指定任何字体族（只用系统默认字体）。
+# 本模块只存数据与着色；绘制与滚动由 app.py 的日志区负责（虚拟渲染，只画可见行）。
 
 from __future__ import annotations
 
-import html
 import time
 
-from PySide6.QtWidgets import QPlainTextEdit
+import style as S
 
-# 阶段标签 → 颜色（不在此表里的标签走默认色）
+# 阶段标签 → 颜色（监控页是深底终端，全部用亮色变体）
 _TAG_COLOR = {
     # 读帧 / 落盘 / 杂项
-    '帧': '#93a0b0', 'memmap': '#93a0b0', '归一': '#93a0b0', '并行': '#93a0b0',
-    '裁剪': '#93a0b0', '时': '#93a0b0',
+    '帧': S.D_HINT, 'memmap': S.D_HINT, '归一': S.D_HINT, '并行': S.D_HINT,
+    '裁剪': S.D_HINT, '时': S.D_HINT,
     # 权重与分区
-    '星表': '#0f9d90', 'C': '#0f9d90', 'S': '#0f9d90', 'σ': '#0f9d90',
-    'R': '#0f9d90', 'W': '#0f9d90',
+    '星表': S.D_ACCENT, 'C': S.D_ACCENT, 'S': S.D_ACCENT, 'σ': S.D_ACCENT,
+    'R': S.D_ACCENT, 'W': S.D_ACCENT,
     # 结果与输出
-    '叠加': '#2b6ea8', '读数': '#2b6ea8', '验收': '#2b6ea8', '输出': '#2b6ea8',
+    '叠加': S.D_BLUE, '读数': S.D_BLUE, '验收': S.D_BLUE, '输出': S.D_BLUE,
     # 异常
-    '错误': '#c0392b', '终止': '#c0392b',
+    '错误': S.D_RED, '终止': S.D_RED,
 }
-_DEFAULT = '#1c2431'
-_STAMP = '#b6bfca'
+_DEFAULT = S.D_TEXT
+_STAMP = S.D_HINT
+
+LINE_H = 18
+MAX_LINES = 20000
 
 
 def tag_of(line: str) -> str:
@@ -40,28 +42,36 @@ def tag_of(line: str) -> str:
     return s[1:end] if end > 0 else ''
 
 
-class LogView(QPlainTextEdit):
-    """只读日志框：调用 append(line)，由内部负责着色与滚动。"""
+class LogModel:
+    """只读日志：append(line) 即可；每行 = (mm:ss, 正文, 颜色)"""
 
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setObjectName('log')
-        self.setReadOnly(True)
-        self.setMaximumBlockCount(20000)
-        self.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
+    def __init__(self):
+        self.lines: list = []
         self._t0 = time.perf_counter()
-
-    def append(self, line: str) -> None:
-        """追加一行：前缀为 mm:ss 耗时（浅灰），正文按标签着色。"""
-        el = time.perf_counter() - self._t0
-        stamp = f'{int(el // 60):02d}:{int(el % 60):02d}'
-        body = html.escape(line)
-        color = _TAG_COLOR.get(tag_of(line), _DEFAULT)
-        self.appendHtml(
-            f'<span style="color:{_STAMP}">{stamp}</span> '
-            f'<span style="color:{color}">{body}</span>')
-        self.verticalScrollBar().setValue(self.verticalScrollBar().maximum())
+        self.scroll = 0.0        # 0 = 顶部；由 app 钳制
+        self.follow = True       # 自动贴底
 
     def reset_clock(self) -> None:
-        """每次开始运行时将耗时前缀归零。"""
+        """每次开跑把耗时前缀归零"""
         self._t0 = time.perf_counter()
+
+    def clear(self) -> None:
+        self.lines = []
+        self.scroll = 0.0
+        self.follow = True
+
+    def append(self, line: str) -> None:
+        el = time.perf_counter() - self._t0
+        stamp = f'{int(el // 60):02d}:{int(el % 60):02d}'
+        color = _TAG_COLOR.get(tag_of(line), _DEFAULT)
+        self.lines.append((stamp, line, color))
+        if len(self.lines) > MAX_LINES:
+            del self.lines[:len(self.lines) - MAX_LINES]
+        self.follow = True
+
+    def plain_lines(self):
+        """供自检用：'mm:ss 正文' 列表"""
+        return [f'{st} {txt}' for st, txt, _c in self.lines]
+
+    def content_h(self, view_h: float) -> float:
+        return max(view_h, len(self.lines) * LINE_H + 8)
