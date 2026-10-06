@@ -152,7 +152,8 @@ def main() -> int:
     par_slots = np.array(mmr)
     par_sky = np.array([g[1] for g in got])
     par_sig = np.array([g[2] for g in got])
-    par_meta = [{'name': g[3], 'exptime': g[4]} for g in got]
+    par_meta = [{'name': g[3]['name'], 'exptime': float(g[3]['exptime'])}
+                for g in got]          # 20261006 引擎的 _task_read_frame 现回传完整 meta 字典
 
     check(np.array_equal(ser_slots, par_slots),
           f'帧数据槽位逐位相同（最大差 {np.abs(ser_slots - par_slots).max():.3e}）')

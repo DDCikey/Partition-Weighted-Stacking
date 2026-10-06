@@ -144,10 +144,8 @@ python main.py --cli --help          # 查看全部参数与默认值
 python tests/smoke_ui.py         # 界面冒烟：控件与参数一一对应、读写闭环、日志着色
 ```
 
-仓库内另有两项引擎回归——`tests/check_equiv.py`（与定稿基准逐位比对）与
-`tests/check_parallel.py`（并行与串行逐位比对）——它们依赖开发环境里的定稿
-测试台 `test_tools/DWT_stack_v2.py` 与观测数据，这些**不随本仓库分发**，
-在公开仓库中无法直接运行。
+仓库内另有一项引擎回归：`tests/check_parallel.py`（并行与串行逐位一致——纯合成
+数据、秒级，可直接运行）。
 
 ## 八、目录结构
 
@@ -167,8 +165,7 @@ ui/
   app.py               主窗口（布局 / 事件路由 / 渲染 / 设置持久化）
 tests/
   smoke_ui.py          界面冒烟自检
-  check_equiv.py       引擎等价性回归（需内部测试台与观测数据）
-  check_parallel.py    并行一致性回归（需内部测试台与观测数据）
+  check_parallel.py    并行一致性回归（合成数据，可直接运行）
 xisf_io.py             XISF / FITS 读写（自研实现）
 DWT_DetailCore.py      读帧、曝光归一、星点检测与 PSF 拟合
 WevvMoldGUI_for_python/  图形界面框架（自研，MIT；Python 绑定 + 核心 DLL）
