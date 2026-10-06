@@ -49,6 +49,7 @@ import contextlib
 import io
 import math
 import os
+import re
 import sys
 import time
 from concurrent.futures import ProcessPoolExecutor
@@ -143,9 +144,23 @@ _PHASE_SPAN = (
 )
 _SPAN = {name: (lo, hi) for name, lo, hi in _PHASE_SPAN}
 
+# 20261006 多滤镜分组：_GROUP = [组号, 总组数, 日志前缀标签]。
+#   单组时 = [0, 1, '']——_emit 不缩放、log 不加前缀，行为与旧版逐位一致。
+_GROUP: List = [0, 1, '']
+
+
+def _set_group(gi: int, gn: int, label: str = '') -> None:
+    """进入某滤镜组：进度换算缩到该组的全局区间，日志行加 [滤镜] 前缀"""
+    _GROUP[0], _GROUP[1] = gi, max(1, gn)
+    _GROUP[2] = f'[{label}] ' if label else ''
+
 
 def log(msg: str = '') -> None:
-    """引擎唯一输出口：界面接管后写成日志行，未接管则打 stdout（回调异常也退回）"""
+    """引擎唯一输出口：界面接管后写成日志行，未接管则打 stdout（回调异常也退回）。
+    多滤镜分组时自动带组前缀（空行不加）——否则几十上百行日志分不清是哪组滤镜的。"""
+    pre = _GROUP[2]
+    if pre and msg.strip():
+        msg = f'{pre}{msg}'
     sink = _LOG_SINK[0]
     if sink is None:
         print(msg, flush=True)
@@ -157,13 +172,18 @@ def log(msg: str = '') -> None:
 
 
 def _emit(phase: str, frac: float, text: str = '') -> None:
-    """报进度：frac 是**本阶段内**完成度，此处换算成全局百分比后交给界面"""
+    """报进度：frac 是**本阶段内**完成度，此处换算成全局百分比后交给界面。
+    多滤镜分组时再缩进当前组的全局区间：(组号 + 组内值) / 总组数。"""
     fn = _PROGRESS[0]
     if fn is None:
         return
     lo, hi = _SPAN.get(phase, (0.0, 1.0))
+    v = lo + (hi - lo) * min(1.0, max(0.0, float(frac)))
+    gi, gn = _GROUP[0], _GROUP[1]
+    if gn > 1:
+        v = (gi + v) / gn
     try:
-        fn(phase, lo + (hi - lo) * min(1.0, max(0.0, float(frac))), text)
+        fn(phase, v, text)
     except Exception:
         pass
 
@@ -203,10 +223,12 @@ FRAME_SUFFIXES = ('.xisf', '.fit', '.fits', '.fts')
 def collect_frames(photos_str: str) -> Tuple[List[Path], List[Path]]:
     """把素材声明展开成帧文件列表（多源：目录与单张可混用，用 ; 分隔）
 
-    每个来源的展开规则与旧版单目录语义逐字一致：目录内 sorted(glob('*.xisf'))
-    非空则整目录按 XISF 读，否则整目录按 FITS 读；单张文件按扩展名直接收录。
-    去重按规范路径（同一文件被两个来源重复声明只算一帧），最终按路径全名排序
-    保证读取顺序确定。返回 (帧列表, 顺序保持的来源列表)。
+    20261006 目录改为**递归收集**：深空数据常按 目标/日期/滤镜 分级存放，
+    子文件夹里的帧也要收。XISF / FITS 混合树的取舍按**子目录**判断——
+    与旧版单目录语义一致（同一目录里两种格式并存视为同一批数据的两种导出，
+    只收 XISF，避免同帧重复叠加），不同子目录各用各的格式、互不影响。
+    单张文件按扩展名直接收录。去重按规范路径（同一文件被两个来源重复声明
+    只算一帧），最终按路径全名排序保证读取顺序确定。返回 (帧列表, 来源列表)。
     """
     sources: List[Path] = []
     seen_src = set()
@@ -227,9 +249,17 @@ def collect_frames(photos_str: str) -> Tuple[List[Path], List[Path]]:
     seen_file = set()
     for src in sources:
         if src.is_dir():
-            batch = sorted(src.glob('*.xisf')) or sorted(src.glob('*.fit*'))
+            by_dir: Dict[Path, List[Path]] = {}
+            for f in src.rglob('*'):
+                if f.is_file() and f.suffix.lower() in FRAME_SUFFIXES:
+                    by_dir.setdefault(f.parent, []).append(f)
+            batch: List[Path] = []
+            for d in sorted(by_dir, key=lambda p: str(p).lower()):
+                grp = sorted(by_dir[d], key=lambda f: str(f).lower())
+                xisf = [f for f in grp if f.suffix.lower() == '.xisf']
+                batch.extend(xisf or grp)
             if not batch:
-                raise SystemExit(f'{src} 里没有 XISF / FITS 帧')
+                raise SystemExit(f'{src}（含子文件夹）里没有 XISF / FITS 帧')
         elif src.is_file():
             if src.suffix.lower() not in FRAME_SUFFIXES:
                 raise SystemExit(f'不支持的帧格式：{src.name}（{src}）')
@@ -245,6 +275,52 @@ def collect_frames(photos_str: str) -> Tuple[List[Path], List[Path]]:
         raise SystemExit('素材里没有帧')
     files.sort(key=lambda f: str(f).lower())
     return files, sources
+
+
+def group_frames_by_filter(files: List[Path]) -> Dict[str, List[Path]]:
+    """20261006 按帧头滤镜名分组（分组叠加第一步）。
+
+    只读文件头不解码像素（read_filter_hint：FITS 读 FILTER 卡，XISF 只读
+    XML 元数据段），几百帧也就几秒。头里没有滤镜信息的帧归入 ''（单独成组
+    照常叠加，日志点名）；同一滤镜名的帧合为一组。顺序 = 首次出现
+    （files 已按路径排序，结果确定）。
+    """
+    from DWT_DetailCore import read_filter_hint
+    groups: Dict[str, List[Path]] = {}
+    t0 = time.perf_counter()
+    for f in files:
+        _check_cancel()
+        name = ''
+        try:
+            name = read_filter_hint(f)
+        except Exception:
+            pass
+        groups.setdefault(name, []).append(f)
+    log(f'[分组] 读头 {len(files)} 帧 {time.perf_counter() - t0:.1f}s → '
+        f'{len(groups)} 组：'
+        + '  '.join(f'{k or "无滤镜信息"}×{len(v)}' for k, v in groups.items()))
+    if '' in groups:
+        log('[分组] 注意：以上帧的文件头没有滤镜信息（FILTER / Instrument:Filter:Name），'
+            '已单独成组')
+    return groups
+
+
+def _safe_seg(s: str) -> str:
+    """文件名段安全化：路径非法字符换下划线"""
+    return re.sub(r'[\\/:*?"<>|]+', '_', (s or '').strip()).strip()
+
+
+def _out_stem(tag: str, fname: str, multi: bool) -> str:
+    """20261006 成品文件主名（用户定稿）：一律 PWS_ 开头。
+    有成品名 → PWS_<成品名>，分组时再接滤镜段 → PWS_<成品名>_<滤镜>；
+    无成品名 → PWS_<滤镜>（单组且无滤镜信息时退化为 PWS）。"""
+    t, f = _safe_seg(tag), _safe_seg(fname)
+    parts = ['PWS']
+    if t:
+        parts.append(t)
+    if f and (multi or not t):
+        parts.append(f)
+    return '_'.join(parts)
 
 
 def resolve_center(frames: List[Path], crop: int,
@@ -1177,8 +1253,13 @@ def run(p: PwsParams, on_log=None, on_progress=None, should_cancel=None) -> Dict
 
 
 def _run(p: PwsParams) -> Dict:
-    """引擎本体。数值路径与 test_tools/DWT_stack_v2.py **逐位一致**：
-    同参数下两者成品的逐像素最大差 = 0（由 DWT/tests/check_equiv.py 核对）。
+    """引擎入口（数值路径与 test_tools/DWT_stack_v2.py **逐位一致**，
+    由 DWT/tests/check_equiv.py 核对）。
+
+    20261006 分组叠加：展开素材后按帧头滤镜名自动分组（group_frames_by_filter），
+    逐组独立走一遍完整流程（读帧→星表→R 场→叠加→导出）。各组之间不共用任何
+    中间量——不同滤镜的星点亮度/天空水平差异大，星表、σ、权重必须组内自洽。
+    只有一种滤镜时只有一组，行为与旧版逐位一致。
     """
     photos = (p.photos or '').strip()
     if not photos:
@@ -1187,18 +1268,51 @@ def _run(p: PwsParams) -> Dict:
     if not (p.out or '').strip():
         raise SystemExit('请选择输出目录（不放在素材目录里，避免成品被当成帧）')
     out_dir = Path(p.out)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    _emit('读帧', 0.0, '读头分组')
+    groups = group_frames_by_filter(frames)
+    multi = len(groups) > 1
+    t_start = time.perf_counter()
+    res: Dict = {}
+    summaries: List[Dict] = []
+    for gi, (fname, gframes) in enumerate(groups.items()):
+        stem = _out_stem(p.tag, fname, multi)
+        # 多组时每组日志都带前缀区分（无滤镜信息的组用「未知」）
+        _set_group(gi, len(groups), (fname or '未知') if multi else '')
+        log(f'—— 组 {gi + 1}/{len(groups)}：{fname or "无滤镜信息"}，'
+            f'{len(gframes)} 帧 ——')
+        res = _run_group(gframes, sources, p, out_dir, stem)
+        summaries.append({
+            'filter': fname, 'n': int(res['n']), 'shape': res['shape'],
+            'fwhm_med': float(res['fwhm_med']), 'fwhm_out': float(res['fwhm_out']),
+            'rej_rate': float(res['rej_rate']),
+            'stem': stem, 'file': str(out_dir / f'{stem}.xisf'),
+        })
+        if multi:
+            res['stack'] = None      # 成品已落盘；别把每组成品都攒在内存里
+    _set_group(0, 1, '')
+    if multi:
+        log(f'[时] 全部 {len(groups)} 组总计 {time.perf_counter() - t_start:.1f}s')
+        res['groups'] = summaries
+    return res
+
+
+def _run_group(frames: List[Path], sources: List[Path], p: PwsParams,
+               out_dir: Path, stem: str) -> Dict:
+    """单滤镜组的叠加本体（原 _run 的数值路径原样搬入）：只把「展开素材 /
+    建输出目录」上提到 _run，tag 换成成品文件主名 stem，算法逐行未动。"""
     # 参数别名：下面整段算法体保持 v2 原样，只把入参换成 p.xxx
     A, B = float(p.A), float(p.B)
     r_floor = float(p.r_floor)
     env_win_mult, env_eps, env_p = float(p.env_win_mult), float(p.env_eps), float(p.env_p)
-    rej_k, n_star, tag = float(p.rej_k), int(p.n_star), (p.tag.strip() or 'stack')
+    rej_k, n_star = float(p.rej_k), int(p.n_star)
     rej_gate = float(p.rej_gate)                  # 少数派闸门（推荐默认 1/3，可设）
     limit = int(p.limit) or None
     crop, keep_frames, frames_dir = int(p.crop), bool(p.keep_frames), p.frames_dir
     save_xisf = True
-
-    out_dir.mkdir(parents=True, exist_ok=True)
     t_start = time.perf_counter()
+
     _emit('读帧', 0.0, '准备')
 
     # ---- 阶段 0：读帧 + 帧级归一（自动选驻留 / memmap）----
@@ -1387,7 +1501,7 @@ def _run(p: PwsParams) -> Dict:
     }
 
     if save_xisf:
-        p_out = out_dir / f'stack_{tag}.xisf'
+        p_out = out_dir / f'{stem}.xisf'
         _emit('验收', 0.7, '导出成品')
         save_linear_xisf(p_out, Stk, metas,
                          f'PWS A={A:g} B={B:g} rej_k={rej_k:g}',
@@ -1398,12 +1512,13 @@ def _run(p: PwsParams) -> Dict:
                                'NeffMedian': float(np.median(neff)),
                                'SigmaFrameMedian': float(np.median(sig_out)),
                                'SigmaSky': sky_sd})
-        np.save(out_dir / f'neff_{tag}.npy', neff)
-        np.save(out_dir / f'R_{tag}.npy', R)
-        np.savetxt(out_dir / f'weights_{tag}.txt',
+        np.save(out_dir / f'{stem}_neff.npy', neff)
+        np.save(out_dir / f'{stem}_R.npy', R)
+        np.savetxt(out_dir / f'{stem}_weights.txt',
                    np.column_stack([np.arange(n), fwhms, C, sig_out, S]),
                    header='idx fwhm_px C_sharp sigma S_snr', comments='# ', fmt='%.6g')
-        log(f'[输出] 逐帧权重表 weights_{tag}.txt / R 场 R_{tag}.npy / N_eff neff_{tag}.npy')
+        log(f'[输出] 逐帧权重表 {stem}_weights.txt / R 场 {stem}_R.npy / '
+            f'N_eff {stem}_neff.npy')
 
     log(f'[时] 总计 {time.perf_counter() - t_start:.1f}s')
     _emit('验收', 1.0, '完成')

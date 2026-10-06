@@ -20,9 +20,9 @@ from wevvmold import ease          # 20261006 原生缓动求值（分段导航�
 from style import (ACCENT, ACCENT_BG, ACCENT_BD, ACCENT_D, ACCENT_DS, BLUE,
                    BORDER, CARD, DARK, DARK_2, DARK_HOV, DISABLED, DISABLED_BG,
                    DISABLED_BD, HINT, RED, RED_BD, RED_BG, RED_BD2, SEL_BG, TEXT,
-                   TEXT2, TRACK, TINT, TINT_BD, WHITE, char_w, elide_middle,
+                   TEXT2, TRACK, TINT, TINT_BD, WHITE, elide_middle,
                    gloss_top, inner_shadow_top, pill, round_rect,
-                   round_rect_border, shade_bottom, shadow, text_w)
+                   round_rect_border, shade_bottom, shadow)
 from style import (D_ACCENT, D_BLUE, D_HINT, D_RED, D_TEXT, D_TEXT2, D_TRACK)
 from theme import mix
 
@@ -251,7 +251,8 @@ class Button(Widget):
                          valign=1, halign=1)
 
     def desired_w(self, pad=28):
-        return text_w(self.text, S.FS_SMALL if self.kind == 'src' else S.FS_BODY) + pad
+        return S.text_width(self.text,
+                            S.FS_SMALL if self.kind == 'src' else S.FS_BODY) + pad
 
 
 # ---------------------------------------------------------------- 状态胶囊
@@ -282,7 +283,7 @@ class Chip(Widget):
         rc.draw_text(self.text, l + 22, t, r, b, S.FS_BODY, fg, valign=1)
 
     def desired_w(self):
-        return text_w(self.text, S.FS_BODY) + 40
+        return S.text_width(self.text, S.FS_BODY) + 40
 
 
 # ---------------------------------------------------------------- 复选框
@@ -422,29 +423,31 @@ class TextEdit(Widget):
         self._caret = self._anchor = i + len(s)
 
     # ---- 几何 ----
+    # 20261006 光标/选择/滚动全部改用渲染器的真实度量（style.prefix_widths：
+    # 渲染帧内 measure_text 并缓存，事件处理查缓存，未命中退 char_w 估算）。
+    # 估算表的误差会随文本长度累积，长路径输入框里光标与字形明显错位。
     def _x_of(self, idx) -> float:
         l, t, r, b = self.rect
-        return l + self.PAD + text_w(self._text[:idx], S.FS_BODY) - self._view
+        return l + self.PAD + S.prefix_widths(self._text, S.FS_BODY)[idx] - self._view
 
     def _idx_of_x(self, x) -> int:
         px = x - (self.rect[0] + self.PAD) + self._view
-        acc = 0.0
-        for i, ch in enumerate(self._text):
-            w = char_w(ch, S.FS_BODY)
-            if acc + w / 2 > px:
-                return i
-            acc += w
+        ws = S.prefix_widths(self._text, S.FS_BODY)
+        for i in range(1, len(ws)):
+            if px < (ws[i - 1] + ws[i]) / 2:      # 半字符判定，与旧口径一致
+                return i - 1
         return len(self._text)
 
     def _clamp_view(self):
         l, t, r, b = self.rect
         vw = max(1.0, r - l - 2 * self.PAD)
-        cx = text_w(self._text[:self._caret], S.FS_BODY)
+        ws = S.prefix_widths(self._text, S.FS_BODY)
+        cx = ws[self._caret]
         if cx < self._view:
             self._view = max(0.0, cx - 8)
         elif cx > self._view + vw - 4:
             self._view = cx - vw + 8
-        tw = text_w(self._text, S.FS_BODY)
+        tw = ws[-1]
         self._view = max(0.0, min(self._view, max(0.0, tw - vw + 4)))
 
     # ---- 渲染 ----
@@ -462,24 +465,29 @@ class TextEdit(Widget):
         round_rect_border(rc, l, t, r, b, 5, bd, bg)
         if self.enabled:
             inner_shadow_top(rc, l, t, r, b, 5, alpha=5)          # 输入槽内凹
+        # 20261006 事件路径（打字/点击）里 _view 是按估算列宽设的；渲染帧此处
+        # measure 可用，prefix_widths 会度量真值并缓存 → 先用真值重钳滚动，
+        # 再绘制，避免估算残差让右端多裁/多露一个字符。
+        self._clamp_view()
         if not self._text and self.placeholder and not self.focused:
             rc.draw_text(self.placeholder, l + self.PAD, t, r - self.PAD, b,
                          S.FS_BODY, HINT, valign=1)
+        ws = S.prefix_widths(self._text, S.FS_BODY)
         a, z = self._sel_range()
         if a != z and self.enabled:
-            xa, xb = self._x_of(a), self._x_of(z)
+            xa = l + self.PAD + ws[a] - self._view
+            xb = l + self.PAD + ws[z] - self._view
             xa = max(xa, l + 1)
             xb = min(xb, r - 1)
             if xb > xa:
                 rc.fill_rect(xa, t + 4, xb, b - 4, SEL_BG)
-        # 正文：逐字符画，天然带横向视口裁剪（无裁剪区约束）
-        x = l + self.PAD - self._view
-        for ch in self._text:
+        # 正文：逐字符画，天然带横向视口裁剪（无裁剪区约束）；列距用真实度量
+        for i, ch in enumerate(self._text):
+            x = l + self.PAD + ws[i] - self._view
             if x > r - self.PAD:
                 break
-            if x + char_w(ch, S.FS_BODY) >= l + self.PAD - 1:
+            if x + (ws[i + 1] - ws[i]) >= l + self.PAD - 1:
                 rc.draw_text(ch, x, t, r, b, S.FS_BODY, fg, valign=1)
-            x += char_w(ch, S.FS_BODY)
         if self.focused and self.enabled and self._blink_on and not self.read_only:
             cx = self._x_of(self._caret)
             if l + 1 <= cx <= r - 1:
@@ -722,7 +730,7 @@ class TabBar(Widget):
                 self.on_select(i)
 
     def _widths(self):
-        return [text_w(s, S.FS_BODY) + 24 for s in self.labels]
+        return [S.text_width(s, S.FS_BODY) + 24 for s in self.labels]
 
     def _tab_at(self, x):
         px = self.rect[0]
@@ -749,7 +757,7 @@ class TabBar(Widget):
         l, t, r, b = self.rect
         x = l
         for i, lab in enumerate(self.labels):
-            w = text_w(lab, S.FS_BODY) + 24
+            w = S.text_width(lab, S.FS_BODY) + 24
             if i == self.index:
                 fg = ACCENT
                 rc.draw_text(lab, x, t, x + w, b, S.FS_BODY, fg, valign=1, halign=1)
@@ -762,7 +770,7 @@ class TabBar(Widget):
         # 下划线：2.5px 圆条，在页签中心间滑动
         ci = self._center(self._slide)
         ii = max(0, min(len(self.labels) - 1, int(round(self._slide))))
-        uw = text_w(self.labels[ii], S.FS_BODY) + 12
+        uw = S.text_width(self.labels[ii], S.FS_BODY) + 12
         round_rect(rc, ci - uw / 2, b - 3.5, ci + uw / 2, b - 0.5, 1.5, ACCENT)
 
     def tick(self, dt_ms) -> bool:

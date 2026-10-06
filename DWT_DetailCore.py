@@ -25,6 +25,7 @@
 
 import numpy as np
 import warnings
+import struct            # 20261006 read_filter_hint：XISF 固定头的 header_length 解析
 import hashlib           # 缓存指纹
 import json              # 缓存里的标量元数据
 import math              # 截尾因子解析式（erf）
@@ -321,6 +322,52 @@ def read_frame(path: Path) -> Tuple[np.ndarray, Dict]:
     data = np.ascontiguousarray(data, dtype=np.float32)
     meta.update({'path': str(path), 'name': path.name, 'shape': data.shape})
     return data, meta
+
+
+def read_filter_hint(path: Path) -> str:
+    """20261006 轻量读取单帧的滤镜名（分组叠加的依据）：只读文件头，不解码像素。
+
+    FITS：astropy 只读 header，取 FILTER 卡；
+    XISF：只读固定头（魔数 8B + header_length 4B 小端）声明的 XML 元数据段
+          （几十 KB，不碰 attachment 像素区），FITSKeyword FILTER 优先，
+          Property Instrument:Filter:Name 后备。
+    读不了（格式不对/头损坏）或没有该信息都返回 ''，调用方把这类帧
+    归入"未知"组。不能整帧解码来分组：一帧几百 MB，几十帧就是几十 GB 的白读。
+    """
+    suffix = path.suffix.lower()
+    try:
+        if suffix in FITS_SUFFIXES:
+            hdr = fits.getheader(path)
+            return str(hdr.get('FILTER', '') or '').strip().strip("'").strip()
+        if suffix == '.xisf':
+            import xml.etree.ElementTree as ET
+            with open(path, 'rb') as f:
+                head = f.read(16)
+                if len(head) < 16 or not head.startswith(b'XISF'):
+                    return ''
+                (hlen,) = struct.unpack_from('<I', head, 8)
+                xml_text = f.read(hlen).decode('utf-8', 'ignore')
+            try:
+                root = ET.fromstring(xml_text)
+            except ET.ParseError:
+                return ''
+            # 标签名可能带命名空间前缀（PI 写出的文件两种都有），按尾部比对
+            val = ''
+            for el in root.iter():
+                if el.tag.rsplit('}', 1)[-1] == 'FITSKeyword' and \
+                        el.get('name', '').upper() == 'FILTER':
+                    val = el.get('value', '') or ''
+                    break
+            if not val:
+                for el in root.iter():
+                    if el.tag.rsplit('}', 1)[-1] == 'Property' and \
+                            el.get('id', '') == 'Instrument:Filter:Name':
+                        val = el.get('value', '') or ''
+                        break
+            return val.strip().strip("'").strip()
+    except Exception:
+        return ''
+    return ''
 
 
 # ---------------------------------------------------------------------------

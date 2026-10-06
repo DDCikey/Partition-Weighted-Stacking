@@ -197,6 +197,15 @@ class MainWindow:
 
     # ================================================================ 渲染
     def _on_render(self, rc):
+        # 20261006 真实文本度量：measure_text 仅回调期内可用——进回调先注入钩子
+        # （控件度量→缓存），回调结束解绑；两帧之间的事件处理查缓存。
+        S.set_measure_fn(rc.measure_text)
+        try:
+            self._render(rc)
+        finally:
+            S.set_measure_fn(None)
+
+    def _render(self, rc):
         w, h = self._w, self._h
         rc.fill_rect(0, 0, w, h, S.SOFT)
 
@@ -360,6 +369,9 @@ class MainWindow:
             self._on_key(ev)
         elif t == E['CHAR_INPUT']:
             self._on_char(ev)
+        elif t == E['DPI_CHANGED']:
+            S.clear_measure_cache()      # 20261006 字号随 DPI 缩放，度量缓存全部失效
+            self._relayout()
         elif t == E['TIMER_TICK'] and ev.get('timer_id') == _TIMER_ID:
             self._on_tick(self._tick_cur)
 
@@ -634,7 +646,8 @@ class MainWindow:
                 self._fail(f'素材不存在：{s}')
                 return
             if path.is_dir():
-                if not (next(path.glob('*.xisf'), None) or next(path.glob('*.fit*'), None)):
+                # 20261006 与引擎口径一致：目录递归检索（子文件夹也算）
+                if not (next(path.rglob('*.xisf'), None) or next(path.rglob('*.fit*'), None)):
                     self._fail(f'目录里没有 XISF / FITS 帧：{s}')
                     return
             elif path.suffix.lower() not in ('.xisf', '.fit', '.fits', '.fts'):
@@ -708,10 +721,22 @@ class MainWindow:
         self.worker = None
         self._settle()
         h, w = res['shape']
-        self.log.append(f'[验收] 成品 {w}×{h}  星点 FWHM {res["fwhm_out"]:.2f}px'
-                        f'（单帧中位 {res["fwhm_med"]:.2f}px）  '
-                        f'排异剔除率 {res["rej_rate"]:.3%}')
-        self._foot_info_text = f'XISF · Float32 线性 · {w}×{h}'
+        # 20261006 分组叠加：多滤镜时逐组报一行（含成品文件名），底栏注明组数
+        groups = res.get('groups') or []
+        if len(groups) > 1:
+            self.log.append(f'[验收] 按滤镜分 {len(groups)} 组叠加完成：')
+            for g in groups:
+                self.log.append(
+                    f'[验收]   {Path(g["file"]).name}  {g["n"]} 帧  '
+                    f'星点 FWHM {g["fwhm_out"]:.2f}px'
+                    f'（单帧中位 {g["fwhm_med"]:.2f}px）  '
+                    f'排异剔除率 {g["rej_rate"]:.3%}')
+            self._foot_info_text = f'XISF · Float32 线性 · {w}×{h} · {len(groups)} 组'
+        else:
+            self.log.append(f'[验收] 成品 {w}×{h}  星点 FWHM {res["fwhm_out"]:.2f}px'
+                            f'（单帧中位 {res["fwhm_med"]:.2f}px）  '
+                            f'排异剔除率 {res["rej_rate"]:.3%}')
+            self._foot_info_text = f'XISF · Float32 线性 · {w}×{h}'
         self._set_state('done', '完成')
         self._clamp_log()
         self._redraw()

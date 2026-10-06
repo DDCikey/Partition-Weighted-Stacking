@@ -51,62 +51,157 @@ FS_HUGE   = 40              # 监控页圆环中央大百分比（20261006 v3）
 
 
 def char_w(ch: str, size: float) -> float:
-    """单字符宽度估算（系统默认字体；CJK≈1em，ASCII 按字形分档）"""
+    """单字符宽度估算（系统默认字体；CJK≈1em，其余按字形分档）。
+    20261006 按渲染器实测墨迹重新校准（test_tools/_tmp_char_metrics.py 逐字符量得）：
+    旧表的 / 0.32 与 m/w 0.54 明显小于真实字形（0.42 / 0.67），逐字符绘制的
+    输入框里相邻字母互相叠加（用户报"字母叠加"）；大写 0.68 偏大造成稀疏。
+    新表 = 实测墨迹 + 1px 侧承载（advance），回归对照见 _tmp_font_probe.py。"""
     o = ord(ch)
     if o >= 0x2E80 or ch in '…「」（）：；，。×—':
         return size
     if ch.isdigit():
         return size * 0.556
-    if ch in 'WM':
-        return size * 0.94
+    if ch == 'W':
+        return size * 1.00
+    if ch == 'M':
+        return size * 0.83
+    if ch in 'mw':
+        return size * 0.75
+    if ch in '/_':
+        return size * 0.50
+    if ch == ' ':
+        return size * 0.30
+    if ch == '-':
+        return size * 0.40
     if 'A' <= ch <= 'Z':
-        return size * 0.68
-    if ch in 'il.,:;|!\'()[] ':
-        return size * 0.32
-    return size * 0.54
+        return size * 0.60
+    if ch in 'ijl.,:;|!\'()[]`':
+        return size * 0.24
+    return size * 0.48
 
 
 def text_w(s: str, size: float) -> float:
     return sum(char_w(c, size) for c in s)
 
 
+# ---------------------------------------------------------------------------
+# 20261006 真实文本度量（GUI 的标准做法：排版/光标/选择用字体引擎的真实宽度，
+# 不再依赖估算表）。渲染器 20261006 新增 measure_text(text,size)->float，
+# 但**只在 on_render 回调内可用**，而点击/按键发生在两帧之间——因此渲染帧内
+# 度量并缓存（同一文本同一字号的宽度是恒定的排版事实，缓存永久有效），
+# 事件处理查缓存；未注入钩子或缓存未命中时退回上方 char_w 估算表。
+# DPI / 字体环境变化时由 app 调 clear_measure_cache()。
+# 注意 measure_text 不含尾随空白（与视觉右缘一致）——光标列宽在 prefix_widths
+# 里对尾随空白做 advance 补偿，否则光标无法停在空格之后。
+_MEASURE_FN = [None]        # rc.measure_text，仅渲染回调期内有效
+_W_CACHE = {}               # (text, size) -> float
+_COLS_CACHE = {}            # (text, size) -> [w(空列), w(:1), …, w(整串)]
+_CACHE_CAP = 16384
+
+
+def set_measure_fn(fn) -> None:
+    """app 进入渲染回调时注入 rc.measure_text，回调结束传 None 解绑"""
+    _MEASURE_FN[0] = fn
+
+
+def clear_measure_cache() -> None:
+    """渲染环境（DPI 等）变化后清空缓存，下一帧重新度量"""
+    _W_CACHE.clear()
+    _COLS_CACHE.clear()
+
+
+def text_width(s: str, size: float) -> float:
+    """文本真实渲染宽度：渲染回调内精确度量并缓存；回调外查缓存，未命中退估算"""
+    if not s:
+        return 0.0
+    key = (s, size)
+    w = _W_CACHE.get(key)
+    if w is not None:
+        return w
+    fn = _MEASURE_FN[0]
+    if fn is not None:
+        try:
+            w = float(fn(s, size))
+        except Exception:
+            w = -1.0
+        if w >= 0.0:
+            if len(_W_CACHE) >= _CACHE_CAP:
+                _W_CACHE.clear()
+            _W_CACHE[key] = w
+            return w
+    return text_w(s, size)
+
+
+def prefix_widths(s: str, size: float):
+    """逐列光标 x：返回 len(s)+1 个值，w[i] = 光标停在第 i 列时的内容偏移。
+
+    measure_text 不计尾随空白：w(i) 的度量值若恰好等于去掉尾随空白后的
+    宽度（说明空白被渲染器砍掉），按 char_w 估算 advance 补回，保证光标
+    能停在空格之后；整列强制单调不减。
+
+    缓存纪律（20261006 修"间距不一样"）：事件路径（set_text / 按键后的
+    _clamp_view）发生在渲染回调之外，此时 measure 不可用、列宽只能估算——
+    估算出的列宽表**绝不许**进 _COLS_CACHE，否则渲染帧会命中这份估算缓存、
+    永远不再真实度量（表现就是输入框字距与渲染器排版不一致，大写长串最明显）。
+    只有每一列都来自真值（缓存命中，或本次在回调内度量）才缓存。"""
+    key = (s, size)
+    ws = _COLS_CACHE.get(key)
+    if ws is not None:
+        return ws
+    ws = [0.0]
+    all_real = True
+    for i in range(1, len(s) + 1):
+        pk = (s[:i], size)
+        if pk not in _W_CACHE and _MEASURE_FN[0] is None:
+            all_real = False               # 这一列只能估算，整表不可缓存
+        w = text_width(s[:i], size)
+        head = s[:i].rstrip(' \t')
+        if len(head) < i and text_width(head, size) == w:
+            w += sum(char_w(c, size) for c in s[len(head):i])
+        ws.append(w if w > ws[-1] else ws[-1])
+    if all_real and len(_COLS_CACHE) < _CACHE_CAP:
+        _COLS_CACHE[key] = ws
+    return ws
+
+
 def elide_middle(s: str, size: float, maxw: float) -> str:
-    """路径中段省略：保留头尾，中间 …"""
-    if text_w(s, size) <= maxw:
+    """路径中段省略：保留头尾，中间 …（20261006 起用真实度量 text_width）"""
+    if text_width(s, size) <= maxw:
         return s
     head = tail = ''
     hw = tw = 0.0
-    dots = text_w('…', size)
+    dots = text_width('…', size)
     budget = maxw - dots
     i, j = 0, len(s) - 1
     while i <= j:
-        cw = char_w(s[i], size)
+        cw = text_width(s[:i + 1], size) - text_width(s[:i], size)
         if hw + tw + cw <= budget:
-            head += s[i]; hw += cw; i += 1
+            hw += cw; i += 1
         else:
             break
     while j >= i:
-        cw = char_w(s[j], size)
+        cw = text_width(s[j:], size) - text_width(s[j + 1:], size)
         if hw + tw + cw <= budget:
-            tail = s[j] + tail; tw += cw; j -= 1
+            tw += cw; j -= 1
         else:
             break
     return head + '…' + tail
 
 
 def wrap_text(s: str, size: float, maxw: float):
-    """按宽度折行（悬停说明用），保留显式换行"""
+    """按宽度折行（悬停说明用），保留显式换行（20261006 起用真实度量）"""
     out = []
     for para in s.split('\n'):
         line = ''
         lw = 0.0
         for ch in para:
-            cw = char_w(ch, size)
+            trial = line + ch
+            cw = text_width(trial, size) - text_width(line, size)
             if line and lw + cw > maxw:
                 out.append(line)
                 line, lw = ch, cw
             else:
-                line += ch
+                line = trial
                 lw += cw
         out.append(line)
     return out

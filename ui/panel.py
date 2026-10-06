@@ -223,7 +223,7 @@ class TabPanel:
         if kind in ('float', 'int', 'choice', 'check'):
             ctl_w = _SPIN_W if kind != 'check' else Toggle.W
             w.set_rect(rr - 18 - ctl_w, t + 12, rr - 18, t + 12 + _SPIN_H)
-            lw = S.text_w(prm.label, S.FS_TITLE2)
+            lw = S.text_width(prm.label, S.FS_TITLE2)
             hb.set_rect(l + 18 + lw + 8, t + 14, l + 18 + lw + 30, t + 36)
         else:                                   # dir / text
             hb.set_rect(rr - 40, t + 12, rr - 18, t + 34)

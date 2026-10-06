@@ -81,6 +81,12 @@ class RenderContext:
         _native.render_draw_text(self._rc, text, left, top, right, bottom, size,
                                  *col, int(valign), int(halign))
 
+    def measure_text(self, text, size):
+        """20261006 文本度量：指定字号下文本实际渲染宽度（逻辑像素，不含尾随
+        空白，与 draw_text 的视觉右缘一致；空串返回 0.0）。仅 on_render 回调内可用。
+        （接口文档 §4 / §16：WevvMoldAbi_RenderMeasureText ↔ render_measure_text）"""
+        return _native.render_measure_text(self._rc, text, float(size))
+
     def render_control(self, control, dx=0.0, dy=0.0):
         h = control.handle if isinstance(control, WevvMoldControl) else control
         _native.control_render(h, self._win, dx, dy)

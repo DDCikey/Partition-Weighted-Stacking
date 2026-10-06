@@ -182,7 +182,7 @@ def main() -> int:
         check(win._pct_text() == '100%', f'百分比 {win._pct_text()!r}')
         check(win.btn_run.enabled and not win.btn_stop.enabled, '按钮已复位')
         check(win.panel.editors['基础']['photos'].enabled, '参数面板已解锁')
-        check((out / 'stack_smoke.xisf').exists(), '成品已落盘')
+        check((out / 'PWS_smoke.xisf').exists(), '成品已落盘')
 
         if a.shot:
             # 所见即所得：真窗口（含刚跑出的进度与日志）抓成 PNG
@@ -225,7 +225,7 @@ def main() -> int:
         check(win.chip.text == '已终止', f'终止后状态胶囊 = {win.chip.text!r}')
         check(win.btn_run.enabled and not win.btn_stop.enabled, '终止后按钮已复位')
         check(win.panel.editors['基础']['photos'].enabled, '终止后参数已解锁')
-        check(not (out2 / 'stack_cancel.xisf').exists(), '终止后没有成品')
+        check(not (out2 / 'PWS_cancel.xisf').exists(), '终止后没有成品')
         check(any('终止' in ln for _s, ln, _c in win.log.lines),
               '日志里有终止记录')
         print()
