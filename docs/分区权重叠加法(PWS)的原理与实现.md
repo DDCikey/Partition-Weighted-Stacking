@@ -2,7 +2,7 @@
 
 **Partition-Weighted Stacking (PWS): Principle, Implementation and Multi-Target Validation**
 
-作者：**D.Cikey**　·　版本 v3.1　·　2026-10-05
+作者：**D.Cikey**　·　版本 v3.2　·　2026-10-07
 
 **转载与使用**　本文以 **CC BY 4.0** 发布（<https://creativecommons.org/licenses/by/4.0/deed.zh>），配套软件实现以 **MIT** 许可证发布。欢迎转载、翻译、改编、二次开发乃至商用，**无需另行申请、无需付费**；只请保留作者署名 **D.Cikey**，注明方法出自「**分区权重叠加法（Partition-Weighted Stacking，PWS）**」，并附上原文链接。
 
@@ -225,7 +225,7 @@ $$\mathrm{Var}(\hat\mu) = \sum_i \tilde w_i^2\sigma_i^2,$$
 
 $$R_r = \mathrm{clip}\!\left(\frac{d_r}{M_r+\epsilon\,\sigma},\ 0,\ 1\right)^{\!\eta},\qquad M_r=\max_{\mathrm{win}} d,\quad \mathrm{win}=2h+1,\ \ h=\max\!\big(1,\mathrm{round}(2\sigma_{\mathrm{psf}})\big), \qquad\qquad (8)$$
 
-即 $`M_r`$ 为以 $`r`$ 为中心、边长 $`2h+1`$ 的方形窗口内的局部极大值。半边宽 $`h=\max(1,\mathrm{round}(2\sigma_{\mathrm{psf}}))\approx2\sigma_{\mathrm{psf}}`$，窗宽 $`2h+1`$ 恒为奇数以保证中心对齐，故 $`\mathrm{win}\approx4\sigma_{\mathrm{psf}}`$（下限 $`h\ge1`$，即窗宽 $`\ge3`$ px）。$`\epsilon`$ 为天空抑制常数（默认 8），$`\eta`$ 为形状幂（默认 1）。本文数据集的 $`\sigma_{\mathrm{psf}}`$ 为 0.85～3.14 px，对应窗宽 5～13 px。
+即 $`M_r`$ 为以 $`r`$ 为中心、边长 $`2h+1`$ 的方形窗口内的局部极大值。半边宽 $`h=\max(1,\mathrm{round}(2\sigma_{\mathrm{psf}}))\approx2\sigma_{\mathrm{psf}}`$，窗宽 $`2h+1`$ 恒为奇数以保证中心对齐，故 $`\mathrm{win}\approx4\sigma_{\mathrm{psf}}`$（下限 $`h\ge1`$，即窗宽 $`\ge3`$ px）。$`\epsilon`$ 为天空抑制常数（默认 16），$`\eta`$ 为形状幂（默认 1）。本文数据集的 $`\sigma_{\mathrm{psf}}`$ 为 0.85～3.14 px，对应窗宽 5～13 px。
 
 **为什么 $`R`$ 的径向轮廓不含星点亮度。** 设单颗孤立星点在参考像上的剖面为 $`I(r)=I_0\exp(-r^2/2\sigma_{\mathrm{ref}}^2)`$，$`\sigma_{\mathrm{ref}}`$ 为参考像自身的 PSF 尺度（见下）。当 $`r\le h`$ 时窗口仍含峰值，$`M_r=I_0`$：
 
