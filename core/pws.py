@@ -70,6 +70,16 @@ ENV_EPS = 16.0       # 分母噪声项（以 σ 为单位）：压住空白天�
                      #   0.6%~36%（11/12 组），星核半径与天空噪声不变；再增至 24 收益
                      #   进入测量噪声带，故取 16。
 ENV_P = 1.0          # 形状幂；E 已是 exp(−2r/σ) 量级，1.0 即够，>1 收得更紧
+STAR_GROW = 0.0      # 星点锐帧区外扩（×σ_psf）：最亮星的外扩量，按星点亮度自适应，
+                     #   暗星拿 STAR_GROW_FLOOR 的保底、亮星扩满。0 = 关闭（原行为）。
+STAR_GROW_LO_SNR = 20.0    # 自适应外扩的下端：局部峰值 < 该倍数×天空σ → 只拿保底量
+STAR_GROW_HI_SNR = 1000.0  # 自适应外扩的上端：局部峰值 ≥ 该倍数×天空σ → 扩满 star_grow
+STAR_GROW_FLOOR = 0.5      # 保底系数：拖线长度由风决定、与星点亮度无关，故每颗星都必须
+                           #   拿到足以盖住自身拖线的那部分外扩（grow=0 时会把这些星的拖线
+                           #   又放回来：实测中等星伸长率 0.10→0.15）。亮星再按亮度加成。
+TRAIL_AP = 3.7             # 测拖线用的二阶矩口径 = 该倍数 × σ_psf（≈99.9% 的高斯能量）
+TRAIL_QUANTILE = 90.0      # 自动外扩取"逐帧拖线长度"的该百分位：瞄准最糊的那几帧
+                           #   （漏进星点分区的正是它们；取中位会被大量好帧稀释）
 R_FLOOR = 0.0        # R 的全局下限：R_eff = R_FLOOR + (1−R_FLOOR)·R
                      #   用于抑制星周亮度平台（"亮—暗—亮"伪影环）。环的幅度取决于
                      #   两区有效 PSF 之差：加全局下限使空白天区也保留部分清晰度偏好，
@@ -435,6 +445,13 @@ class FrameSet:
             return measure_fwhm(self.arrays[i], stars)
         return measure_fwhm_frame(self.mm, i, self.off, stars)
 
+    def trail(self, i: int, stars: List[Tuple[int, int]],
+              sigma_psf: float) -> Tuple[float, float]:
+        """第 i 帧的长轴方差中位与长轴方向（估拖线长度用）"""
+        if self.mm is None:
+            return measure_trail(self.arrays[i], stars, sigma_psf)
+        return measure_trail_frame(self.mm, i, self.off, stars, sigma_psf)
+
     @property
     def parallelable(self) -> bool:
         """能否跨进程交给工作进程（memmap 可以，兜底列表不行）"""
@@ -758,6 +775,81 @@ def measure_fwhm(img: np.ndarray, stars: List[Tuple[int, int]],
 
 
 # ---------------------------------------------------------------------------
+# 拖线长度：逐帧二阶矩的长轴方差（比 circular fit_fwhm 更直接地反映"拉长")
+# ---------------------------------------------------------------------------
+
+def _trail_each(kut, stars: List[Tuple[int, int]], r_ap: float, half: int):
+    """逐星二阶矩 → 帧级长轴方差 λ1 与长轴方向（返回 (λ1 中位, PA)）
+
+    为什么用二阶矩而不是拟合：拖线是**方向性**的展宽，圆对称拟合只能给出一个
+    等效变宽的 FWHM；二阶矩能把它拆成 λ1（沿拖线）与 λ2（垂直拖线），
+    再配合参考帧（最锐帧）的 λ1 就能反推拖线本身的长度。
+
+    口径固定为 TRAIL_AP×σ_psf：逐帧用同一个口径，跨帧的 λ1 才可比。
+    方向用 (mx−my, 2·mxy) 的矢量和——它就是 2×PA 的方向，避免角度折叠。
+    """
+    yy, xx = np.mgrid[-half:half + 1, -half:half + 1]
+    rr = np.hypot(xx, yy)
+    ap = rr <= r_ap
+    border = rr >= max(r_ap, half - 2)
+    l1s: List[float] = []
+    vx = vy = 0.0
+    for xi, yi in stars:
+        cut = kut(xi, yi)
+        if cut is None:
+            continue
+        b = np.asarray(cut, dtype=np.float64)
+        bg = float(np.median(b[border])) if bool(border.any()) else float(np.median(b))
+        b = np.maximum(np.where(ap, b - bg, 0.0), 0.0)
+        tot = float(b.sum())
+        if tot <= 0:
+            continue
+        mx = float((b * xx ** 2).sum()) / tot
+        my = float((b * yy ** 2).sum()) / tot
+        mxy = float((b * xx * yy).sum()) / tot
+        tr, det = mx + my, mx * my - mxy * mxy
+        disc = max(tr * tr / 4.0 - det, 0.0)
+        l1s.append(tr / 2.0 + float(np.sqrt(disc)))
+        vx += mx - my
+        vy += 2.0 * mxy
+    if not l1s:
+        return float('nan'), float('nan')
+    return float(np.median(l1s)), float(0.5 * np.arctan2(vy, vx))
+
+
+def measure_trail(img: np.ndarray, stars: List[Tuple[int, int]],
+                  sigma_psf: float) -> Tuple[float, float]:
+    """整帧版（内存后端起用）"""
+    r_ap = TRAIL_AP * max(float(sigma_psf), 0.5)
+    half = int(np.ceil(r_ap)) + 3
+    h, w = img.shape
+
+    def kut(xi: int, yi: int):
+        if xi - half < 0 or yi - half < 0 or xi + half >= w or yi + half >= h:
+            return None
+        return img[yi - half:yi + half + 1, xi - half:xi + half + 1]
+
+    return _trail_each(kut, stars, r_ap, half)
+
+
+def measure_trail_frame(mm: np.ndarray, i: int, off: np.ndarray,
+                        stars: List[Tuple[int, int]],
+                        sigma_psf: float) -> Tuple[float, float]:
+    """memmap 后端：只取星点小窗（与 measure_fwhm_frame 同思路）"""
+    offi = np.float32(off[i])
+    r_ap = TRAIL_AP * max(float(sigma_psf), 0.5)
+    half = int(np.ceil(r_ap)) + 3
+    _n, h, w = mm.shape
+
+    def kut(xi: int, yi: int):
+        if xi - half < 0 or yi - half < 0 or xi + half >= w or yi + half >= h:
+            return None
+        return mm[i, yi - half:yi + half + 1, xi - half:xi + half + 1] - offi
+
+    return _trail_each(kut, stars, r_ap, half)
+
+
+# ---------------------------------------------------------------------------
 # 阶段 B：R_r（分区权重，逐像素连续场）
 # ---------------------------------------------------------------------------
 
@@ -796,13 +888,77 @@ def _r_envelope(sref: np.ndarray, sigma_psf: float, env_win_mult: float = 2.0,
     E = np.clip(E, 0.0, 1.0)
     if env_p and abs(float(env_p) - 1.0) > 1e-9:
         E = np.power(E, float(env_p))
-    return E
+    return E, loc, max(sig, 1e-30)
+
+
+def _grow_support(R: np.ndarray, radius_px: float) -> np.ndarray:
+    """把 R 的支撑沿径向向外平移 radius_px（形态学膨胀 + 高斯羽化）
+
+    为什么是"平移"而不是"整体抬升"：R 的等值线（尤其是 0.5）当前贴在参考
+    星点上；对高斯星点，用半宽 h 的极大值滤波后 R_new(r) = R(r−h)，0.5 等值线
+    正好外移 h 像素，且径向曲线形状不变（不会把整片天空一起抬高）。
+    h 之外立刻回到原值，故空白天区的信噪比不受影响；边界再用 σ=h/2 的高斯
+    羽化，避免方形膨胀在过渡带留下台阶（星周「亮—暗—亮」环的来源之一）。
+
+    radius_px ≤ 0 原样返回；参数在界面上以 σ_psf 为单位给出。
+    """
+    h = int(round(float(radius_px)))
+    if h <= 0:
+        return R
+    d = np.maximum(ndimage.maximum_filter(R, size=2 * h + 1, mode='nearest'), 0.0)
+    d = ndimage.gaussian_filter(d, sigma=max(0.8, h * 0.5), mode='nearest')
+    return np.clip(d, 0.0, 1.0).astype(np.float32)
+
+
+def _grow_support_adaptive(R: np.ndarray, grow_px: float, peak: np.ndarray,
+                           sky_sig: float, levels: int = 4) -> np.ndarray:
+    """按星点亮度自适应地外扩 R 的支撑（半径随局部峰值增大）
+
+    为什么需要自适应：固定外扩把**所有**星点（连同噪声峰）的支撑一起推开，
+    于是暗星周围也长出一圈"锐帧仅有的"晕——那圈比平均叠暗淡、噪声还更高，
+    就是 g=3~4 时看到的星周低信噪/发暗区。物理上需要的只是：**把过渡圈推到
+    "这颗星自己已经暗到看不见"的半径**，而那个半径随亮度增大。
+
+    映射：t = clip( (log10(峰高/天空σ) − log10(LO)) / (log10(HI) − log10(LO)), 0, 1 )
+        峰值 <LO(=20σ) → t=0；峰值 ≥HI(=1000σ) → t=1。
+        外扩量 h = grow_px · (FLOOR + (1−FLOOR)·t)：
+          · FLOOR 这部分是**保底**。拖线长度由风（赤道仪抖动）决定、与星点亮度无关，
+            所以每颗星都要拿到足以盖住自身拖线的那部分；纯按亮度归零时实测中等亮星
+            的伸长率从 0.10 退回 0.15，等于白做。
+          · 亮度加成这部分对应"晕能被看到多远"：只有亮星的外晕才延伸到那么远，
+            把过渡圈推到那里才不会在暗星周围留下一圈空转的锐帧区。
+      用对数而不是线性：光晕影响半径随亮度只按 √log 增长，线性映射会把中等亮星
+        过早推满。阈值以**参考像自身的天空 σ** 为单位，故与曝光/增益无关。
+
+    实现：t 连续，但形态学膨胀只能取整半径 → 取 levels+1 个量化半径各做一次
+    dilate+羽化，再按 t 在相邻两级之间线性混合。混合避免"级边界"在星周留下
+    同心台阶。
+
+    grow_px ≤ 0 原样返回。
+    """
+    g = float(grow_px)
+    if g <= 0:
+        return R
+    b = np.maximum(peak, 1e-30) / max(float(sky_sig), 1e-30)
+    lo, hi = math.log10(STAR_GROW_LO_SNR), math.log10(STAR_GROW_HI_SNR)
+    t = np.clip((np.log10(b) - lo) / max(hi - lo, 1e-6), 0.0, 1.0)
+    f = float(np.clip(STAR_GROW_FLOOR, 0.0, 1.0))
+    t = f + (1.0 - f) * t
+    out = np.zeros(R.shape, dtype=np.float32)
+    for k in range(levels + 1):
+        w = np.clip(1.0 - np.abs(t * levels - k), 0.0, 1.0).astype(np.float32)
+        if not bool(np.any(w > 0)):
+            continue
+        d = R if k == 0 else _grow_support(R, g * k / levels)
+        out += d * w
+    return np.clip(out, 0.0, 1.0)
 
 
 def build_r_field(sref: np.ndarray, sigma_psf: float,
                   win_mult: float = R_WIN_MULT, r_floor: float = R_FLOOR,
                   env_win_mult: float = ENV_WIN_MULT, env_eps: float = ENV_EPS,
-                  env_p: float = ENV_P) -> Tuple[np.ndarray, Dict]:
+                  env_p: float = ENV_P, star_grow: float = STAR_GROW
+                  ) -> Tuple[np.ndarray, Dict]:
     """分区权重 R ∈ [0,1]：此处是"细节型"还是"朦胧型"
 
     R 的构造分两处，均由数据自身确定：
@@ -828,7 +984,22 @@ def build_r_field(sref: np.ndarray, sigma_psf: float,
     T = rms / max(sig_hp, 1e-30)
 
     # 包络映射不经过 T：直接用亮度归一包络，径向轮廓只含 r/σ_psf
-    R = _r_envelope(sref, sigma_psf, env_win_mult, env_eps, env_p)
+    R, loc, sky_sig = _r_envelope(sref, sigma_psf, env_win_mult, env_eps, env_p)
+
+    # 星点锐帧区外扩：半径随星点亮度自适应（亮星推到更暗处，暗星不动）
+    grow_px = float(star_grow) * max(float(sigma_psf), 0.5)
+    grow_mean = 0.0
+    if star_grow and float(star_grow) > 0:
+        R = _grow_support_adaptive(R, grow_px, loc, sky_sig)
+        lo, hi = math.log10(STAR_GROW_LO_SNR), math.log10(STAR_GROW_HI_SNR)
+        t = np.clip((np.log10(np.maximum(loc, 1e-30) / sky_sig) - lo) / max(hi - lo, 1e-6),
+                    0.0, 1.0)
+        t = STAR_GROW_FLOOR + (1.0 - STAR_GROW_FLOOR) * t
+        # 报表用：锐帧区（R>0.5）里实际拿到的平均外扩量。抽样 1/16 像素即可
+        sub = (slice(None, None, 4), slice(None, None, 4))
+        core = R[sub] > 0.5
+        grow_mean = float(t[sub][core].mean()) * grow_px if bool(core.any()) else 0.0
+        del loc
 
     # 全局下限：R_eff = floor + (1−floor)·R。见 R_FLOOR 常量处的推导依据。
     if r_floor and r_floor > 0:
@@ -837,6 +1008,8 @@ def build_r_field(sref: np.ndarray, sigma_psf: float,
     R = R.astype(np.float32)
     info = {
         'sigma_psf': float(sigma_psf), 'win': int(win), 'sig_hp': float(sig_hp),
+        'star_grow': float(star_grow), 'grow_px': float(grow_px),
+        'grow_px_mean': float(grow_mean),
         'T_p50': float(np.median(T)), 'T_p90': float(np.percentile(T, 90)),
         'T_p99': float(np.percentile(T, 99)), 'T_max': float(T.max()),
         'R_mean': float(R.mean()),
@@ -1012,6 +1185,13 @@ def _task_fwhm(job) -> Tuple[int, float]:
     """
     i, stars = job
     return int(i), measure_fwhm_frame(_MEM['mm'], i, _MEM['off'], stars)
+
+
+def _task_trail(job) -> Tuple[int, float, float]:
+    """一帧的长轴方差中位与长轴方向（估拖线长度；同样只取星点小窗）"""
+    i, stars, sigma_psf = job
+    l1, pa = measure_trail_frame(_MEM['mm'], i, _MEM['off'], stars, sigma_psf)
+    return int(i), l1, pa
 
 
 def _task_strip(job):
@@ -1245,6 +1425,9 @@ def _run(p: PwsParams) -> Dict:
         log(f'—— 组 {gi + 1}/{len(groups)}：{fname or "无滤镜信息"}，'
             f'{len(gframes)} 帧 ——')
         res = _run_group(gframes, sources, p, out_dir, stem)
+        # 评价页按 stem 回读 _R.npy / _neff.npy（res 不持有 R 数组）
+        res['stem'] = stem
+        res['out_dir'] = str(out_dir)
         summaries.append({
             'filter': fname, 'n': int(res['n']), 'shape': res['shape'],
             'fwhm_med': float(res['fwhm_med']), 'fwhm_out': float(res['fwhm_out']),
@@ -1268,6 +1451,7 @@ def _run_group(frames: List[Path], sources: List[Path], p: PwsParams,
     A, B = float(p.A), float(p.B)
     r_floor = float(p.r_floor)
     env_win_mult, env_eps, env_p = float(p.env_win_mult), float(p.env_eps), float(p.env_p)
+    star_grow_pct = float(p.star_grow_pct)
     rej_k, n_star = float(p.rej_k), int(p.n_star)
     rej_gate = float(p.rej_gate)                  # 剔除比例上限（默认 1/3）
     limit = int(p.limit) or None
@@ -1347,18 +1531,74 @@ def _run_group(frames: List[Path], sources: List[Path], p: PwsParams,
 
     sigma_psf = fmed / 2.3548
 
+    # ---- 拖线长度：逐帧二阶矩，供 star_grow 自动取值 ----
+    #   帧级 λ1（沿长轴的方差）减去参考帧（最锐 k 帧）的 λ1，剩下的就是拖线本身
+    #   贡献的方差；均匀拖线长度 L 满足 λ1−λ1_ref = L²/12。
+    star_grow = 0.0
+    t2 = time.perf_counter()
+    if star_grow_pct > 0:
+        lam1 = np.full(n, np.nan)
+        pas = np.full(n, np.nan)
+        nw = 0 if (not fs.parallelable or _no_parallel()) \
+            else min(plan_workers(32 * 2 ** 20, '测拖线', cap=CAP_FWHM), n)
+        if nw > 1:
+            ex = ProcessPoolExecutor(max_workers=nw, initializer=ini, initargs=ini_args)
+            try:
+                for i, l1, pa in ex.map(_task_trail,
+                                        ((i, stars, sigma_psf) for i in range(n)),
+                                        chunksize=1):
+                    _check_cancel()
+                    lam1[i], pas[i] = l1, pa
+            finally:
+                ex.shutdown(wait=True, cancel_futures=True)
+        else:
+            for i in range(n):
+                _check_cancel()
+                lam1[i], pas[i] = fs.trail(i, stars, sigma_psf)
+
     # ---- 阶段 B：R 场 ----
     _emit('R 场', 0.0, '建参考像')
     k = max(1, min(REF_SHARP_N, n))
     idx = np.argsort(np.nan_to_num(fwhms, nan=1e9))[:k]
+
+    if star_grow_pct > 0:
+        ref1 = float(np.nanmedian(lam1[idx]))
+        d1 = np.maximum(lam1 - ref1, 0.0)
+        L = np.sqrt(12.0 * d1)
+        okL = np.isfinite(L)
+        Lv = L[okL]
+        if len(Lv):
+            grow_auto = float(np.percentile(Lv, TRAIL_QUANTILE))
+            star_grow = grow_auto / max(sigma_psf, 0.5) * star_grow_pct / 100.0
+            w = np.where(okL, d1, 0.0)
+            cv = float(np.nansum(w * np.cos(2 * pas)))
+            sv = float(np.nansum(w * np.sin(2 * pas)))
+            coh = float(np.hypot(cv, sv) / max(float(w.sum()), 1e-30))
+            pa_mean = float(0.5 * np.degrees(np.arctan2(sv, cv))) % 180.0
+            log(f'[拖线] 逐帧拖线长度 P50 {np.percentile(Lv, 50):.1f}px  '
+                f'P{TRAIL_QUANTILE:.0f} {grow_auto:.1f}px  最大 {Lv.max():.1f}px  '
+                f'{time.perf_counter() - t2:.1f}s')
+            log(f'[拖线] 方向一致性 {coh:.2f}（1=同向）  平均 PA {pa_mean:.0f}°')
+            log(f'[拖线] 自动外扩 {grow_auto:.1f}px ÷ σ_psf {sigma_psf:.2f}px = '
+                f'{grow_auto / max(sigma_psf, 0.5):.2f}σ_psf；'
+                f'按 {star_grow_pct:g}% 取 {star_grow:.2f}σ_psf')
+        del lam1, pas, d1, L
+    else:
+        log('[拖线] 星点锐帧扩展已关闭（0%）')
+
     sref = np.median(np.stack([fs.frame(int(i)) for i in idx], axis=0),
                      axis=0).astype(np.float32)
     R, rinfo = build_r_field(sref, sigma_psf, r_floor=r_floor,
                              env_win_mult=env_win_mult,
-                             env_eps=env_eps, env_p=env_p)
+                             env_eps=env_eps, env_p=env_p,
+                             star_grow=star_grow)
     log(f'[R] 参考像 = 最锐 {k} 帧等权中位  映射=包络(亮度归一)  口径=边缘强度  '
         f'下限={r_floor:g}  σ_psf={rinfo["sigma_psf"]:.2f}px  '
         f'窗={rinfo["win"]}px  T 尺度={rinfo["sig_hp"]:.4e}')
+    if star_grow > 0:
+        log(f'[R] 星点锐帧区自适应外扩：最亮星 {rinfo["grow_px"]:.1f}px'
+            f'（{star_grow:g}σ_psf），全图均值 {rinfo["grow_px_mean"]:.2f}px'
+            f'（R>0.5 占比 {rinfo["R_gt50"]:.2%}）')
     log(f'[R] 对比度 T 中位 {rinfo["T_p50"]:.2f}  P90 {rinfo["T_p90"]:.2f}  '
         f'P99 {rinfo["T_p99"]:.2f}  最大 {rinfo["T_max"]:.1f}')
     log(f'[R] 分区权重 R 均值 {rinfo["R_mean"]:.3f}  '

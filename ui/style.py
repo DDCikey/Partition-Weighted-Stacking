@@ -165,7 +165,6 @@ def elide_middle(s: str, size: float, maxw: float) -> str:
     """路径中段省略：保留头尾，中间 …（用真实度量 text_width）"""
     if text_width(s, size) <= maxw:
         return s
-    head = tail = ''
     hw = tw = 0.0
     dots = text_width('…', size)
     budget = maxw - dots
@@ -182,7 +181,7 @@ def elide_middle(s: str, size: float, maxw: float) -> str:
             tw += cw; j -= 1
         else:
             break
-    return head + '…' + tail
+    return s[:i] + '…' + s[j + 1:]
 
 
 def wrap_text(s: str, size: float, maxw: float):

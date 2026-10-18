@@ -2,9 +2,10 @@
 #
 # 结构：
 #   顶栏（深墨 #171e29，高 92）：teal 徽标 + 标题/副标题 + 居中分段导航
-#     （素材 / 参数 / 高级 / 监控）+ 状态胶囊 + 圆形终止/运行钮；
+#     （素材 / 参数 / 高级 / 监控 / 评价）+ 状态胶囊 + 圆形终止/运行钮；
 #   内容区（浅灰 SOFT 底，左右留白 40）：素材页 = Drop 取景框 + 行卡清单；
 #     参数/高级页 = 双列白卡网格；监控页 = 左侧圆环进度 + 右侧深色终端日志卡；
+#     评价页 = R 场 / N_eff 场并排查看（maps.MapsPage）；
 #   底栏：输出路径（左）与成品信息（右）。
 #
 # 动效：分段滑块滑动、控件 hover/press 过渡、进度值 lerp；换页即时全部显示。
@@ -33,6 +34,7 @@ import style as S                                        # noqa: E402
 import theme                                             # noqa: E402
 from pws_params import PARAMS, PARAMS_VER, PwsParams, tip  # noqa: E402
 from logview import LINE_H, LogModel                     # noqa: E402
+from maps import MapsPage                                # noqa: E402
 from panel import TabPanel                               # noqa: E402
 from worker import StackWorker                           # noqa: E402
 from widgets import (Chip, ChoiceBox, Ring, RoundButton, Segmented,  # noqa: E402
@@ -58,7 +60,7 @@ _FOOT_BAND = 44                   # 底部留给信息条的带高
 _TIMER_ID = 1
 _TICK_MS = theme.TICK_IDLE
 _TICK_ANIM = theme.TICK_ANIM
-_SEG_W = 400                      # 分段导航总宽
+_SEG_W = 430                      # 分段导航总宽（五页；最小窗口下不与状态胶囊相碰）
 
 
 def mmss(sec: float) -> str:
@@ -94,6 +96,7 @@ class MainWindow:
         self.panel = TabPanel()
         self.panel.on_layout_needed = self._relayout
         self.panel.on_show_tip = self._show_tip
+        self.maps = MapsPage()
         self.log = LogModel()
 
         # ---- 交互状态 ----
@@ -177,6 +180,8 @@ class MainWindow:
         if self._scroll_off != prev_off:
             self.panel.layout(cx, _CONTENT_TOP, content_bot,
                               w - 2 * cx, self._scroll_off)
+        if self.panel.current_group() == theme.MAPS_GROUP:
+            self.maps.layout(cx, _CONTENT_TOP + 10, content_bot, w - 2 * cx)
         self._clamp_log()
         self._dirty = True
 
@@ -225,6 +230,8 @@ class MainWindow:
         # ---- 内容区 ----
         if self.panel.current_group() is None:
             self._draw_monitor(rc, w)
+        elif self.panel.current_group() == theme.MAPS_GROUP:
+            self.maps.render(rc)
         else:
             self.panel.draw_chrome(rc)
             for wd in self.panel.widgets:
@@ -378,7 +385,9 @@ class MainWindow:
             if wd.interactive and wd.contains(x, y):
                 return wd
         in_content = _CONTENT_TOP <= y <= self._content_bot
-        for wd in reversed(self.panel.widgets):
+        ws = (self.maps.widgets if self.panel.current_group() == theme.MAPS_GROUP
+              else self.panel.widgets)
+        for wd in reversed(ws):
             if not wd.interactive or not wd.contains(x, y):
                 continue
             if not in_content and not (isinstance(wd, ChoiceBox) and wd.open):
@@ -403,7 +412,7 @@ class MainWindow:
             self._clamp_log()
             self._redraw()
             return
-        if self._pressed is not None and isinstance(self._pressed, TextEdit):
+        if self._pressed is not None and hasattr(self._pressed, 'on_drag'):
             self._pressed.on_drag(x, y)
             self._redraw()
             return
@@ -427,6 +436,8 @@ class MainWindow:
                     self._tip_anchor = wd if row >= 0 else None
                     self._tip_t0 = time.perf_counter()
                     need = True
+            if getattr(wd, 'redraw_on_move', False):
+                need = True
         # 只在命中目标真正变化时重绘：鼠标 125Hz 事件每个都全场景重绘是卡顿主因；
         # 悬停后的渐变动画由 _on_tick 的 anim 通道驱动
         if need:
@@ -490,8 +501,7 @@ class MainWindow:
 
     def _on_wheel(self, x, y, delta):
         wd = self._hit(x, y)
-        if isinstance(wd, SpinEdit) and wd.enabled:
-            wd.on_wheel(x, y, delta)
+        if wd is not None and wd.enabled and wd.on_wheel(x, y, delta):
             self._redraw()
             return
         if self.panel.current_group() is None:
@@ -545,7 +555,7 @@ class MainWindow:
 
     # ================================================================ 定时器
     def _all_widgets(self):
-        return self._widgets + [self.bar] + self.panel.widgets
+        return self._widgets + [self.bar] + self.panel.widgets + self.maps.widgets
 
     def _on_tick(self, dt):
         now = time.perf_counter()
@@ -572,6 +582,9 @@ class MainWindow:
         # 进度约每 0.7s 刷一次，肉眼是"跳动"
         if self.worker is not None and now - self._last_flush >= 0.7:
             self._flush_progress(now)
+        # 评价页的后台解析结果
+        if self.maps.poll():
+            self._dirty = True
 
         # 控件动画（切页即时全部显示）
         # 保证动画终帧仍重绘：_approach 在本帧把动画量推到终点的同一拍
@@ -734,6 +747,8 @@ class MainWindow:
                             f'（单帧中位 {res["fwhm_med"]:.2f}px）  '
                             f'排异剔除率 {res["rej_rate"]:.3%}')
             self._foot_info_text = f'XISF · Float32 线性 · {w}×{h}'
+        self.maps.load_result(res)
+        self.log.append('[评价] 正在载入 R 场与 N_eff 场，稍候可在「评价」页查看')
         self._set_state('done', '完成')
         self._clamp_log()
         self._redraw()

@@ -10,6 +10,8 @@ Float32 灰度成品。它使用的叠加算法名为 **Partition-Weighted Stack
   同一份数据下结果与串行逐位相同。
 - 软件 MIT、方法论文 CC BY 4.0。欢迎二次开发，只请保留署名——见文末「许可与署名」。
 
+本分发包构建日期：**2026-10-18**（Windows x64）。
+
 ---
 
 测试软件下载：https://pan.baidu.com/s/1b_jnoBnct1Y5kaiAv0Px5g?pwd=rnst
@@ -70,6 +72,25 @@ python -m pip install psutil        # 可选：用于探测可用内存，决定
 XISF / FITS 读写由仓库内的 `xisf_io.py` 完成，**不需要**安装 PyPI 上的
 `xisf` 包。
 
+### 直接使用分发包（免安装）
+
+已编译的 Windows 64 位独立程序（`DWT.exe`）随本仓库的 Release 附件提供，
+源码仓库内不含二进制：它由 PyInstaller 生成，已内含 Python 运行时与全部依赖，
+无需安装 Python。系统要求：Windows 10 / 11（x64）。双击 `DWT.exe` 启动图形界面；
+命令行请用源码运行（见第四节）。
+
+分发包内容（Release 附件解压后）：
+
+```
+DWT.exe                    主程序
+_internal/                 运行时与依赖（含 Python、NumPy/SciPy/Astropy/Photutils）
+README.md                  本文件
+LICENSE                    本软件 MIT 许可证
+THIRD_PARTY_LICENSES.md    第三方组件与 XISF 规范声明
+LICENSES/                  各第三方组件的许可证全文
+WevvMoldGUI_for_python/    图形界面框架的 MIT 许可证与第三方说明
+```
+
 ## 四、运行
 
 图形界面：
@@ -94,7 +115,7 @@ python main.py --cli --help          # 查看全部参数与默认值
 开始，避免换新数据后沿用上一批数据集的位置（这三项与"这一次要叠哪批数据"
 绑定，跨次继承只会出错）。
 
-## 五、参数（共 17 项，三档）
+## 五、参数（共 18 项，三档）
 
 ### 基础档（3）
 
@@ -114,7 +135,7 @@ python main.py --cli --help          # 查看全部参数与默认值
 | 帧落盘目录 | `--frames-dir` | （空） | 帧多到装不进内存时的临时帧文件位置。留空 = 自动挑盘（需 1.25× 余量）：优先软件所在目录 `_DWT_frames`（源码版=项目盘，打包版=exe 所在目录，目录只读时自动跳过），其次系统 TEMP，再在其余固定盘中按余量取第一个够用的。166 帧全幅约需 40 GiB。 |
 | 保留帧文件 | `--keep-frames` | 关 | 跑完不删除临时帧文件。默认关闭；反复调参时勾上，临时帧 .dat 会留在落盘目录，供事后检查或排查。注意：无论是否勾选，每次叠加都会重新读取源帧并重新落盘，勾选并不省落盘时间。 |
 
-### 高级档（9）
+### 高级档（10）
 
 | 界面标签 | 命令行 | 默认 | 说明 |
 | --- | --- | --- | --- |
@@ -123,7 +144,8 @@ python main.py --cli --help          # 查看全部参数与默认值
 | 信噪比幂 B | `--B` | `2` | 朦胧区用多少帧数换噪声（论文式 6）。`B=2` 不是调出来的：加权平均方差最小 ⇔ 权重 ∝ 1/σ² ⇔ S²。除非做实验，否则不要动。 |
 | 包络窗 | `--env-win-mult` | `2` | 局部极大窗宽度 = 该值 × 2σ_psf，决定"和多大范围内的最亮处比"。2.0 对应约 4σ_psf 见方。调大更宽容（R 覆盖更广），调小更贴合星点。 |
 | 包络噪声项 | `--env-eps` | `16` | 分母加上 该值 × σ（论文式 8 的 εσ 项），使空白天区的 R 趋近 0（严格吃满信噪比）。默认 16（12 组 568 帧全量定标）：星点余晖收紧 0.6%～36%（12 组无一实质恶化），星核与天空噪声在 8→16 全程不变（唯一例外：帧间清晰度分歧极大的数据星核增约 5%）。8 更宽松、星点余晖偏松；20 以上收益进入测量噪声带、24 为安全上限，不建议超过。 |
-| 包络形状幂 | `--env-p` | `1` | >1 收窄支撑（R 更贴核心），<1 放宽。默认 1.0。 |
+| 包络形状幂 | `--env-p` | `1` | >1 收窄支撑（R 更贴核心），<1 放宽。默认 1.0。调小它只把 R 整体压平，不能替代"星点锐帧扩展"。 |
+| 星点锐帧扩展 | `--star-grow-pct` | `100` | 按实测拖线长度自动外扩星点锐帧区。单位是百分比：`100` = 用实测值（默认），`0` = 关闭，>`100` = 在实测值上放大。<br>实测方式：逐帧量星点二阶矩的长轴方差，减去最锐 8 帧的参考值，得到每帧的拖线长度；取 P90 换算成 σ_psf（屏幕日志会打印 P50/P90/最大与方向一致性）。帧间没有拖线时自动接近 0，不会误开。<br>**用在哪**：帧间星点被风抖成长条、叠完星点不够圆的数据。放大过头后星点不再变圆，只会降低锐帧区的等效帧数，并在星点周围出现一圈窄暗环。 |
 | R 下限 | `--r-floor` | `0` | 全图保留的最小清晰度偏好。抬高它 → 空白天区也偏向锐帧 → 星周"外圈亮环"变浅；代价是天空等效帧数下降。0 = 关闭。 |
 | 星表星数 | `--n-star` | `120` | 测帧间清晰度用的固定星表规模。在信噪比最好的一帧上一次性选星（未饱和、孤立、最亮），之后所有帧量同一批位置。中位数在 100 颗以上已稳定。 |
 | 剔除比例上限 | `--rej-gate` | `0.33` | 同一像素被排帧数超出"噪声期望误排数"的部分超过该比例，即判"不是孤立离群"，该像素不排异——防止把多数帧共有的真实结构（星核锐 / 糊双峰、对齐黑边）当伪迹排掉。默认 1/3；调大排得更狠，调小更保守。已扣除噪声期望误排数，与 k 解耦。 |
@@ -139,7 +161,17 @@ python main.py --cli --help          # 查看全部参数与默认值
 | `<名>_R.npy` | 分区权重场（Float32，与成品同尺寸）。 |
 | `<名>_neff.npy` | 等效帧数场（每个像素实际用上多少帧的信噪比）。 |
 
+界面顶栏的「评价」页直接读取这两个 `.npy`：左图是分区权重场 R（亮处 = 权重压向最锐帧），
+右图是等效帧数场 N_eff（参与该像素的有效帧数）。成品可达数千万像素，页面按整数块归并到
+长边 900 px 后显示——R 取块内最大值（细节区只占 0.1%~0.2%，均值会被背景稀释到看不见）、
+N_eff 取块内均值；卡片上的统计读数仍按全分辨率数组计算。滚轮缩放、拖动平移、悬停读数
+（两图联动显示同一位置的 R 与 N_eff）；右上「读取…」可打开任意已有的 `<名>_R.npy` /
+`<名>_neff.npy`，多滤镜叠加时用「下一组」切换。
+
 ## 七、目录结构
+
+以下为**源码仓库**的结构。可执行分发包（`DWT.exe` + `_internal/` + 许可证文件）
+不随仓库提供，见第三节与仓库的 Release 附件。
 
 ```
 main.py                入口：python main.py（--cli 走命令行）
@@ -153,6 +185,7 @@ ui/
                        下拉 / 源列表 …）
   logview.py           日志视图（按阶段着色）
   panel.py             四页视图（素材 / 参数 / 高级 / 监控），控件由 PARAMS 生成
+  maps.py              评价页：R 场 / N_eff 场可视化（后台解析 / 降采样 / 上色 / 读数）
   worker.py            threading 跑引擎 + 进度 / 取消
   app.py               主窗口（布局 / 事件路由 / 渲染 / 设置持久化）
 xisf_io.py             XISF / FITS 读写
@@ -178,7 +211,8 @@ python -m PyInstaller --noconfirm --clean --windowed --name DWT ^
     --paths WevvMoldGUI_for_python/python ^
     --add-binary "WevvMoldGUI_for_python/python/WevvMoldCore.dll;." ^
     --add-binary "WevvMoldGUI_for_python/python/_wevvmold.pyd;." ^
-    --collect-all photutils ^
+    --collect-submodules photutils ^
+    --copy-metadata photutils ^
     --exclude-module matplotlib ^
     --exclude-module torch --exclude-module torchvision ^
     --exclude-module skimage --exclude-module sklearn ^
@@ -190,6 +224,7 @@ python -m PyInstaller --noconfirm --clean --windowed --name DWT ^
     --exclude-module tqdm --exclude-module certifi ^
     --exclude-module Cython --exclude-module charset_normalizer ^
     --exclude-module markupsafe --exclude-module lz4 ^
+    --exclude-module cffi ^
     main.py
 ```
 
@@ -198,6 +233,12 @@ python -m PyInstaller --noconfirm --clean --windowed --name DWT ^
 - `WevvMoldCore.dll` 与 `_wevvmold.pyd` 必须用 `--add-binary` 放进产物根目录
   （`_internal/`），两者**必须在同一目录**——扩展模块加载时按同目录定位核心 DLL。
 - **不能排除 tkinter**：界面用它做文件对话框与剪贴板，排除会直接弄坏这两处。
+- **photutils 用 `--collect-submodules` + `--copy-metadata`，不要用 `--collect-all`**：
+  `--collect-all` 会把 photutils 的 tests 与测试数据一并打进包（多出约 240 个文件、
+  3 MB 以上）；而 photutils 3.0 在导入时用 `importlib.metadata.requires('photutils')`
+  探测可选依赖，只收子模块、不复制元数据会在运行时报
+  `PackageNotFoundError: No package metadata was found for photutils`。
+  `--copy-metadata photutils` 只带入 `photutils-*.dist-info/METADATA`，两者配合即可。
 
 `--exclude-module` 那一串是给"环境里还装着别的科学计算包"的机器用的：本软件不依赖
 它们，不排除就会被拖进包里，产物体积成倍上涨。
@@ -222,8 +263,8 @@ python -m PyInstaller --noconfirm --clean --windowed --name DWT ^
 ### 《分区权重叠加法》论文
 
 方法论文以 **CC BY 4.0** 发布——署名即可自由转载、改编、商用，无需另行申请。
-全文见 [docs/分区权重叠加法(PWS)的原理与实现.md](<docs/分区权重叠加法(PWS)的原理与实现.md>)；
-原文与 PDF 下载渠道：<https://github.com/DDCikey/Partition-Weighted-Stacking/tree/main/docs>；
+全文见 [docs/分区权重叠加法(PWS)的原理与实现.md](<docs/分区权重叠加法(PWS)的原理与实现.md>)，或在线访问
+<https://github.com/DDCikey/Partition-Weighted-Stacking/tree/main/docs>；
 PDF 版可在微信公众号「小丁的星空」下载。
 
 ### 如果你用到了它

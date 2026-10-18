@@ -159,7 +159,8 @@ class TabPanel:
         self._chrome = []
 
         group = self.current_group()
-        if group is None:                       # 监控页：内容由 app 画
+        if group is None or group == theme.MAPS_GROUP:
+            # 监控页 / 评价页：内容由 app 直接画，本面板不生成参数卡
             self._apply_visibility(group, clip)
             self.content_h = 0.0
             return self.content_h
